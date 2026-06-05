@@ -2,7 +2,7 @@ package net.runelite.client.plugins.microbot.irkedmlm.session;
 
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-import net.runelite.client.plugins.microbot.motherloadmine.IrkedMLMConfig;
+import net.runelite.client.plugins.microbot.irkedmlm.IrkedMLMConfig;
 import net.runelite.client.plugins.microbot.util.antiban.Rs2Antiban;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
@@ -69,9 +69,9 @@ public abstract class Session {
 
     protected static final int UPPER_FLOOR_HEIGHT_THRESHOLD = -490;
     protected static final net.runelite.api.coords.WorldPoint LADDER_BOTTOM_WALK =
-            net.runelite.client.plugins.microbot.motherloadmine.IrkedMLMMapConstants.LADDER_BOTTOM_WALK;
+            net.runelite.client.plugins.microbot.irkedmlm.IrkedMLMMapConstants.LADDER_BOTTOM_WALK;
     protected static final net.runelite.api.coords.WorldPoint LADDER_TOP_WALK =
-            net.runelite.client.plugins.microbot.motherloadmine.IrkedMLMMapConstants.LADDER_TOP_WALK;
+            net.runelite.client.plugins.microbot.irkedmlm.IrkedMLMMapConstants.LADDER_TOP_WALK;
 
     // ------------------------------------------------------------------
     // Floor detection cache (rate-limited client thread access)
