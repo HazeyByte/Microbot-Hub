@@ -4,7 +4,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 import net.runelite.api.coords.WorldPoint;
-import net.runelite.client.plugins.microbot.motherloadmine.enums.MLMMiningSpot;
+import net.runelite.client.plugins.microbot.irkedmlm.enums.MLMMiningSpot;
 
 /**
  * Fixed Motherlode Mine world coordinates and static blocked tiles (map truth only — no gameplay rules).
