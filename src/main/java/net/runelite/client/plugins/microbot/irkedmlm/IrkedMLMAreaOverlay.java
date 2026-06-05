@@ -14,7 +14,7 @@ import net.runelite.api.Perspective;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldArea;
 import net.runelite.api.coords.WorldPoint;
-import net.runelite.client.plugins.microbot.motherloadmine.enums.MLMMiningSpot;
+import net.runelite.client.plugins.microbot.irkedmlm.enums.MLMMiningSpot;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
