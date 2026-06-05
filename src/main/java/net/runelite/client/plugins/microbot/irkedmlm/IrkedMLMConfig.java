@@ -5,8 +5,8 @@ import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigInformation;
 import net.runelite.client.config.ConfigItem;
 import net.runelite.client.config.ConfigSection;
-import net.runelite.client.plugins.microbot.motherloadmine.enums.MLMMiningSpot;
-import net.runelite.client.plugins.microbot.motherloadmine.enums.MLMSackSize;
+import net.runelite.client.plugins.microbot.irkedmlm.enums.MLMMiningSpot;
+import net.runelite.client.plugins.microbot.irkedmlm.enums.MLMSackSize;
 
 @ConfigGroup(IrkedMLMConfig.configGroup)
 @ConfigInformation(

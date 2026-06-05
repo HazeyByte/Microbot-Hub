@@ -6,7 +6,7 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.client.plugins.microbot.motherloadmine.IrkedMLMMapConstants;
 import net.runelite.client.plugins.microbot.motherloadmine.IrkedMLMConfig;
-import net.runelite.client.plugins.microbot.motherloadmine.enums.MLMMiningSpot;
+import net.runelite.client.plugins.microbot.irkedmlm.enums.MLMMiningSpot;
 import net.runelite.client.plugins.microbot.api.tileobject.Rs2TileObjectCache;
 import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectModel;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;

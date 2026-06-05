@@ -3,7 +3,7 @@ package net.runelite.client.plugins.microbot.irkedmlm;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.plugins.microbot.Microbot;
-import net.runelite.client.plugins.microbot.motherloadmine.session.SessionSnapshot;
+import net.runelite.client.plugins.microbot.irkedmlm.session.SessionSnapshot;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayPosition;
 

@@ -31,7 +31,7 @@ import net.runelite.api.gameval.ObjectID;
  * Behaviour engine for Motherlode Mine mining: vein selection, rockfall memory, path checks,
  * blacklists, scoring, floor transitions, and return-to-area via spot anchors only.
  * <p>
- * Uses {@link net.runelite.client.plugins.microbot.motherloadmine.enums.MLMMiningSpot} for
+ * Uses {@link net.runelite.client.plugins.microbot.irkedmlm.enums.MLMMiningSpot} for
  * {@code contains()} and anchors — never for decisions beyond pure geometry.
  */
 @Slf4j

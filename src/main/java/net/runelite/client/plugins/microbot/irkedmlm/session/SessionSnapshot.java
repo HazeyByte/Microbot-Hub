@@ -1,8 +1,8 @@
 package net.runelite.client.plugins.microbot.irkedmlm.session;
 
 import lombok.Value;
-import net.runelite.client.plugins.microbot.motherloadmine.enums.MLMMiningSpot;
-import net.runelite.client.plugins.microbot.motherloadmine.enums.MLMStatus;
+import net.runelite.client.plugins.microbot.irkedmlm.enums.MLMMiningSpot;
+import net.runelite.client.plugins.microbot.irkedmlm.enums.MLMStatus;
 
 /**
  * Immutable snapshot of the current Motherlode Mine session state.
