@@ -1,4 +1,4 @@
-package net.runelite.client.plugins.microbot.motherloadmine.session;
+package net.runelite.client.plugins.microbot.irkedmlm.session;
 
 import lombok.Value;
 import net.runelite.client.plugins.microbot.motherloadmine.enums.MLMMiningSpot;

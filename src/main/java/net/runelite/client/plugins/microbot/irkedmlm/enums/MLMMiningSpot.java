@@ -1,4 +1,4 @@
-package net.runelite.client.plugins.microbot.motherloadmine.enums;
+package net.runelite.client.plugins.microbot.irkedmlm.enums;
 
 import java.util.Collections;
 import java.util.List;

@@ -1,4 +1,4 @@
-package net.runelite.client.plugins.microbot.motherloadmine.session;
+package net.runelite.client.plugins.microbot.irkedmlm.session;
 
 import java.util.ArrayList;
 import java.util.Collections;

@@ -1,4 +1,4 @@
-package net.runelite.client.plugins.microbot.motherloadmine.session;
+package net.runelite.client.plugins.microbot.irkedmlm.session;
 
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
