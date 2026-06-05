@@ -1,4 +1,4 @@
-﻿# Crafting Plugin
+# Crafting Plugin
 
 The **Crafting Plugin** is a comprehensive automation tool for Old School RuneScape, designed to streamline and optimize Crafting training by supporting a wide variety of crafting activities. Built for the Microbot RuneLite client, this plugin automates crafting processes, inventory management, and banking, allowing for efficient and hands-free Crafting experience gains.
 

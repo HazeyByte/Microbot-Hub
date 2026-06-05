@@ -1,4 +1,4 @@
-﻿# GE Flipper Plugin
+# GE Flipper Plugin
 
 The **GE Flipper Plugin** is an automation tool for Old School RuneScape, designed to help players efficiently flip items for profit at the Grand Exchange. Built for the Microbot RuneLite client, this plugin streamlines the process of buying and selling items, tracking margins, and managing offers, allowing for hands-free and optimized merchanting.
 

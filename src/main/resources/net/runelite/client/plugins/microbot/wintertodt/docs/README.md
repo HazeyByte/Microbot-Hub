@@ -1,4 +1,4 @@
-﻿# MWintertodt Plugin
+# MWintertodt Plugin
 
 The **MWintertodt Plugin** is a RuneLite plugin for the Microbot framework that automates the Wintertodt boss minigame in Old School RuneScape (OSRS). It is designed to help players efficiently participate in Wintertodt by automating all essential actions, maximizing points, and minimizing damage taken.
 

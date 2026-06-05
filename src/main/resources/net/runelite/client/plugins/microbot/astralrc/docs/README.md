@@ -1,4 +1,4 @@
-﻿# Astral Runes Plugin
+# Astral Runes Plugin
 
 The **Astral Runes Plugin** automates crafting Astral runes on Lunar Isle using the Microbot framework.
 

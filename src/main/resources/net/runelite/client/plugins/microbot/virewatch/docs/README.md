@@ -1,4 +1,4 @@
-﻿# Virewatch Killer Plugin
+# Virewatch Killer Plugin
 
 The **Virewatch Killer Plugin** automates combat and looting for Virewatch Sentinels in Old School RuneScape. It is designed for use with the Microbot RuneLite client and provides a hands-free way to efficiently kill Virewatch Sentinels, manage prayer, and loot valuable drops.
 

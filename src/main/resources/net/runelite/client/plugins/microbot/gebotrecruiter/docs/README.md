@@ -1,4 +1,4 @@
-﻿# Gebot Recruiter Plugin
+# Gebot Recruiter Plugin
 
 The **Gebot Recruiter Plugin** is an automation tool for Old School RuneScape, designed to streamline and optimize the process of recruiting followers or managing recruitment-related activities in the game. Built for the Microbot RuneLite client, this plugin automates interactions, manages inventory, and provides real-time feedback, allowing for efficient and hands-free recruitment operations.
 

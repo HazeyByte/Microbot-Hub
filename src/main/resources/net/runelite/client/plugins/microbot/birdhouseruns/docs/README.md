@@ -1,4 +1,4 @@
-﻿# Birdhouse Runs Plugin
+# Birdhouse Runs Plugin
 
 The **Birdhouse Runs Plugin** is an automation tool for Old School RuneScape, designed to efficiently manage and automate birdhouse runs on Fossil Island. Built for the Microbot RuneLite client, this plugin streamlines the process of collecting and setting up birdhouses, making Hunter training and passive profit easier and more efficient.
 

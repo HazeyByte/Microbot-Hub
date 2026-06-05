@@ -1,4 +1,4 @@
-﻿# aerialfishing Plugin
+# aerialfishing Plugin
 
 This folder contains documentation and assets for the **aerialfishing** plugin.
 

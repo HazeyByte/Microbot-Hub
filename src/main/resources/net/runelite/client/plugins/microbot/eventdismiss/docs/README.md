@@ -1,4 +1,4 @@
-﻿# Event Dismiss Plugin
+# Event Dismiss Plugin
 
 The **Event Dismiss Plugin** is a utility tool for Old School RuneScape, designed to automatically dismiss random event NPCs that appear during gameplay. Built for the Microbot RuneLite client, this plugin helps keep your gameplay uninterrupted by quickly and efficiently handling unwanted random events.
 

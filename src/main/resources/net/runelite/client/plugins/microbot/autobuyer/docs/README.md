@@ -1,4 +1,4 @@
-﻿# AutoBuyer Plugin
+# AutoBuyer Plugin
 
 The **AutoBuyer Plugin** automates buying items from shops in Old School RuneScape. It is designed to efficiently purchase items in bulk, handle world hopping, and manage inventory space for optimal buying speed.
 

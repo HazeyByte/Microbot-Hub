@@ -1,4 +1,4 @@
-﻿# Nate Pie Shells Plugin
+# Nate Pie Shells Plugin
 
 The **Nate Pie Shells Plugin** is an automation tool for Old School RuneScape, designed to streamline and optimize the process of making pie shells. This plugin is built for the Microbot RuneLite client and provides a hands-free, efficient way to train Cooking and prepare pie shells for further baking or trading.
 

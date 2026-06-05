@@ -1,4 +1,4 @@
-﻿# House Thieving Plugin
+# House Thieving Plugin
 
 The **House Thieving Plugin** automates the process of thieving from houses in Old School RuneScape, making it easier to train Thieving and collect loot from various in-game houses.
 

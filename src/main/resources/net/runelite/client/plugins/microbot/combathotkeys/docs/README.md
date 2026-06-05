@@ -1,4 +1,4 @@
-﻿# Combat Hotkeys Plugin
+# Combat Hotkeys Plugin
 
 The **Combat Hotkeys Plugin** is a RuneLite plugin for the Microbot framework that automates and streamlines combat actions in Old School RuneScape (OSRS) using customizable hotkeys. It is designed to help players quickly switch prayers, gear, or special attacks with a single key press, improving efficiency and reaction time during combat.
 

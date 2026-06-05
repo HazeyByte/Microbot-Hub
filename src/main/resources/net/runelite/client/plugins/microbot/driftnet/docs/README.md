@@ -1,4 +1,4 @@
-﻿# Drift Net Plugin
+# Drift Net Plugin
 
 The **Drift Net Plugin** is an automation tool for Old School RuneScape, designed to efficiently train Hunter and Fishing by automating the drift net fishing minigame at Fossil Island. Built for the Microbot RuneLite client, this plugin streamlines the process of setting up drift nets, herding fish, collecting rewards, and managing inventory, allowing for hands-free and optimized experience gains.
 

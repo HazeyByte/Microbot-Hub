@@ -1,4 +1,4 @@
-﻿# dailytasks Plugin
+# dailytasks Plugin
 
 This folder contains documentation and assets for the **dailytasks** plugin.
 

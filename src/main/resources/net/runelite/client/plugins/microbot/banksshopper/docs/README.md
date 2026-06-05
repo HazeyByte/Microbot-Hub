@@ -1,4 +1,4 @@
-﻿# Banks Shopper Plugin
+# Banks Shopper Plugin
 
 The **Banks Shopper Plugin** automates buying items from shops in Old School RuneScape, streamlining the process of purchasing large quantities of items from various in-game stores.
 

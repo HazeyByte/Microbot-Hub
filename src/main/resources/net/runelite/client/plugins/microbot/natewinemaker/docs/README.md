@@ -1,4 +1,4 @@
-﻿# Nate Wine Maker Plugin
+# Nate Wine Maker Plugin
 
 The **Nate Wine Maker Plugin** is an automation tool for Old School RuneScape, designed to efficiently create jugs of wine for fast Cooking experience. Built for the Microbot RuneLite client, this plugin automates the entire wine-making process, from withdrawing ingredients to banking finished wines, allowing for hands-free and optimized Cooking training.
 

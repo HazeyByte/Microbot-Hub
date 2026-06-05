@@ -1,4 +1,4 @@
-﻿# Rogues' Den Plugin
+# Rogues' Den Plugin
 
 The **Rogues' Den Plugin** is a RuneLite plugin for the Microbot framework that automates the Rogues' Den minigame in Old School RuneScape (OSRS). It is designed to help players efficiently complete the Rogues' Den maze, navigate obstacles, and maximize rewards with minimal manual input.
 

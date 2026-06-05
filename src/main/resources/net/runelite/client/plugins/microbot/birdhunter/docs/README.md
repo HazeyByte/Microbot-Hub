@@ -1,4 +1,4 @@
-﻿# Bird Hunter Plugin
+# Bird Hunter Plugin
 
 The **Bird Hunter Plugin** is a RuneLite plugin for the Microbot framework that automates bird house runs and bird hunting activities in Old School RuneScape (OSRS). It is designed to help players efficiently set up, check, and collect bird houses, making hunter training more convenient and less time-consuming.
 

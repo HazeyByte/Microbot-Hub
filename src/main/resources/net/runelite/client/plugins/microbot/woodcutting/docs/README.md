@@ -1,4 +1,4 @@
-﻿# Auto Woodcutting Plugin
+# Auto Woodcutting Plugin
 
 The **Auto Woodcutting Plugin** is a RuneLite plugin for the Microbot framework that automates woodcutting activities in Old School RuneScape (OSRS). It is designed to efficiently chop trees, manage inventory, and handle forestry events, making woodcutting more productive and less repetitive.
 

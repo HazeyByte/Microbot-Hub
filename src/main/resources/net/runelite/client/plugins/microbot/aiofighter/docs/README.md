@@ -1,4 +1,4 @@
-﻿# aiofighter Plugin
+# aiofighter Plugin
 
 This folder contains documentation and assets for the **aiofighter** plugin.
 

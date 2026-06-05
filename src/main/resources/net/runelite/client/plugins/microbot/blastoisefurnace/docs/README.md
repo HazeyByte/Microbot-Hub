@@ -1,4 +1,4 @@
-﻿# Blastoise Furnace Plugin
+# Blastoise Furnace Plugin
 
 The **Blastoise Furnace Plugin** is an automation tool for Old School RuneScape, designed to efficiently smelt bars at furnaces, such as the Blast Furnace minigame. Built for the Microbot RuneLite client, this plugin streamlines the process of smelting ores into bars, managing inventory, and banking, allowing for hands-free and optimized Smithing experience gains.
 

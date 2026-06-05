@@ -1,4 +1,4 @@
-﻿# Minnows Fishing Plugin
+# Minnows Fishing Plugin
 
 The **Minnows Fishing Plugin** is an automation tool for Old School RuneScape, designed to efficiently catch minnows at the Fishing Guild. Built for the Microbot RuneLite client, this plugin streamlines the process of fishing for minnows, managing inventory, and handling moving fishing spots, allowing for hands-free and optimized Fishing experience and profit.
 

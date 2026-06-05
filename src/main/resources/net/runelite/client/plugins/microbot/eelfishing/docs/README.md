@@ -1,4 +1,4 @@
-﻿# Eel Fishing Plugin
+# Eel Fishing Plugin
 
 The **Eel Fishing Plugin** is an automation tool for Old School RuneScape, designed to efficiently train Fishing by automating the process of catching various types of eels (such as sacred, lava, or slimy eels) at supported fishing spots. Built for the Microbot RuneLite client, this plugin streamlines fishing, inventory management, and banking, allowing for hands-free and optimized Fishing experience gains.
 

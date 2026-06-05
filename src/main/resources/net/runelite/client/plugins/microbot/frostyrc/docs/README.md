@@ -1,4 +1,4 @@
-﻿# Frosty RC Plugin
+# Frosty RC Plugin
 
 The **Frosty RC Plugin** is an automation tool for Old School RuneScape, designed to efficiently train the Runecrafting skill by automating the process of crafting runes at various altars. Built for the Microbot RuneLite client, this plugin streamlines the process of running to altars, crafting runes, managing inventory, and banking, allowing for hands-free and optimized Runecrafting experience gains.
 

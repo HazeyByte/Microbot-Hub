@@ -1,4 +1,4 @@
-﻿# Flippers Chaser Plugin
+# Flippers Chaser Plugin
 
 The **Flippers Chaser Plugin** is an automation tool for Old School RuneScape, designed to help players efficiently obtain flippers by hunting mogres. Built for the Microbot RuneLite client, this plugin streamlines the process of locating, fighting, and looting mogres, allowing for hands-free and optimized flipper hunting.
 

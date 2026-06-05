@@ -1,4 +1,4 @@
-﻿# Zulrah Overlay Helper
+# Zulrah Overlay Helper
 
 Microbot's Zulrah Helper augments the fight by tracking rotations, warning about attacks, and highlighting optimal defensive prayers.
 

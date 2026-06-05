@@ -1,4 +1,4 @@
-﻿# Bank Tab Sorter Plugin
+# Bank Tab Sorter Plugin
 
 The **Bank Tab Sorter Plugin** helps organize your Old School RuneScape bank by automatically sorting items within your bank tabs for easier access and improved efficiency.
 

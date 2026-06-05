@@ -1,4 +1,4 @@
-﻿# Arrow Maker Plugin
+# Arrow Maker Plugin
 
 The **Arrow Maker Plugin** automates the process of making arrows, bolts, darts, and tipping dragon items in Old School RuneScape, making fletching training and item production more efficient.
 

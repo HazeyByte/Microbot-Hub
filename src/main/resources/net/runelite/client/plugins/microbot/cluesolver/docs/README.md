@@ -1,4 +1,4 @@
-﻿# AIO Magic Plugin
+# AIO Magic Plugin
 
 The **AIO Magic Plugin** is an advanced automation tool for Old School RuneScape, designed to efficiently train Magic by supporting a wide range of spells and activities. Built for the Microbot RuneLite client, this plugin automates various Magic-related tasks, enabling hands-free and optimized Magic training and resource processing.
 

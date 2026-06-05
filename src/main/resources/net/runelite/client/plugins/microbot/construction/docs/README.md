@@ -1,4 +1,4 @@
-﻿# Construction Plugin
+# Construction Plugin
 
 The **Construction Plugin** is an automation tool for Old School RuneScape, designed to efficiently train the Construction skill by automating the process of building and removing furniture in your player-owned house. Built for the Microbot RuneLite client, this plugin streamlines Construction training, allowing for hands-free and optimized experience gains.
 

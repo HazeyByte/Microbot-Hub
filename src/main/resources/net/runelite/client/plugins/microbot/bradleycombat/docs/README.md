@@ -1,4 +1,4 @@
-﻿# Bradley Combat Plugin
+# Bradley Combat Plugin
 
 The **Bradley Combat Plugin** is an advanced automation tool for Old School RuneScape, designed to handle a wide variety of combat scenarios with precision and efficiency. Built for the Microbot RuneLite client, this plugin automates combat actions, manages gear and prayers, and adapts to different combat styles, making it ideal for both AFK and high-intensity PvM or PvP situations.
 

@@ -1,4 +1,4 @@
-﻿# Banks Bank Stander Plugin
+# Banks Bank Stander Plugin
 
 The **Banks Bank Stander Plugin** automates standing at a bank in Old School RuneScape, providing a simple way to keep your character logged in and present at a bank location.
 

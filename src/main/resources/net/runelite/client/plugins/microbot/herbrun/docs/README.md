@@ -1,4 +1,4 @@
-﻿# Herbrun Plugin
+# Herbrun Plugin
 
 The **Herbrun Plugin** is a RuneLite plugin for the Microbot framework that automates herb farming runs in Old School RuneScape (OSRS). It is designed to help players efficiently manage and complete herb runs by automating patch navigation, planting, composting, and harvesting.
 

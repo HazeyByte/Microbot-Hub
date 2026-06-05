@@ -1,4 +1,4 @@
-﻿# Farm Tree Run Plugin
+# Farm Tree Run Plugin
 
 The **Farm Tree Run Plugin** is an automation tool for Old School RuneScape, designed to efficiently manage and complete tree and fruit tree farming runs. Built for the Microbot RuneLite client, this plugin streamlines the process of planting, checking, and harvesting trees across all major farming patches, allowing for hands-free and optimized Farming experience gains.
 

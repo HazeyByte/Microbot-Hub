@@ -1,4 +1,4 @@
-﻿# Chaos Altar Plugin
+# Chaos Altar Plugin
 
 The **Chaos Altar Plugin** is an automation tool for Old School RuneScape, designed to maximize Prayer experience by automating the process of offering bones at the Chaos Altar in the Wilderness. Built for the Microbot RuneLite client, this plugin streamlines bone offering, inventory management, and banking, allowing for efficient and hands-free Prayer training.
 

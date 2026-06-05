@@ -1,4 +1,4 @@
-﻿# Fishing Trawler Plugin
+# Fishing Trawler Plugin
 
 The **Fishing Trawler Plugin** is an automation tool for Old School RuneScape, designed to efficiently complete the Fishing Trawler minigame. Built for the Microbot RuneLite client, this plugin streamlines the process of participating in the minigame, managing repairs, bailing water, and collecting rewards, allowing for hands-free and optimized Fishing experience and loot.
 

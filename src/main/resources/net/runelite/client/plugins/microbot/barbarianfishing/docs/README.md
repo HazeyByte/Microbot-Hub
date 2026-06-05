@@ -1,4 +1,4 @@
-﻿# Barbarian Fishing Plugin
+# Barbarian Fishing Plugin
 
 The **Barbarian Fishing Plugin** is an automation tool for Old School RuneScape, designed to efficiently train Fishing (and optionally Strength and Agility) by automating the barbarian fishing activity at the Barbarian Outpost. Built for the Microbot RuneLite client, this plugin streamlines the process of catching fish, dropping or banking them, and managing inventory, allowing for hands-free and optimized experience gains.
 

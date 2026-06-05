@@ -1,4 +1,4 @@
-﻿# Discord Plugin
+# Discord Plugin
 
 The **Discord Plugin** for the Microbot RuneLite client integrates Discord functionality directly into Old School RuneScape (OSRS). It allows users to receive notifications, interact with Discord, and manage settings from within the RuneLite client.
 

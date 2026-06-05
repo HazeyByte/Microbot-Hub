@@ -1,4 +1,4 @@
-﻿# Animated Armour Plugin
+# Animated Armour Plugin
 
 The **Animated Armour Plugin** automates the process of fighting animated armour in the Warriors' Guild for defenders and tokens.
 

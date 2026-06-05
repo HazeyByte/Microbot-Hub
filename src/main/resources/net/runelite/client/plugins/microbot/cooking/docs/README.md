@@ -1,4 +1,4 @@
-﻿# Cooking Plugin
+# Cooking Plugin
 
 The **Cooking Plugin** is an automation tool for Old School RuneScape, designed to efficiently train the Cooking skill by automating the process of cooking food at various locations. Built for the Microbot RuneLite client, this plugin streamlines cooking, inventory management, and banking, allowing for hands-free and optimized Cooking experience gains.
 

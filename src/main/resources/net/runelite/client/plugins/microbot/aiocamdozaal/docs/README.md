@@ -1,4 +1,4 @@
-﻿# AIO Camdozaal Plugin
+# AIO Camdozaal Plugin
 
 The **AIO Camdozaal Plugin** is an automation tool for Old School RuneScape, designed to efficiently train skills and perform activities within the Camdozaal area (Giants' Foundry). Built for the Microbot RuneLite client, this plugin streamlines various Camdozaal minigame tasks, including smithing, resource management, and activity loops, allowing for hands-free and optimized experience gains.
 
