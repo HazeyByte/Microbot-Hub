@@ -92,6 +92,9 @@ public class MotherloadMineScript extends Script
 
 	private boolean shouldEmptySack = false;
 	private boolean shouldRepairWaterwheel = false;
+	private boolean emptySackWorkflowActive = false;
+	private long idleSince = 0;
+	private int idleThreshold = 0;
 	private boolean pickedUpHammer = false;
     private MLMStatus lastLoggedStatus = null;
 
@@ -108,7 +111,7 @@ public class MotherloadMineScript extends Script
     {
         log.info("Starting MotherloadMine script");
         initialize();
-        mainScheduledFuture = scheduledExecutorService.scheduleWithFixedDelay(this::executeTask, 0, 600, TimeUnit.MILLISECONDS);
+        mainScheduledFuture = scheduledExecutorService.scheduleWithFixedDelay(this::executeTaskSafely, 0, 600, TimeUnit.MILLISECONDS);
         return true;
     }
 
@@ -121,19 +124,29 @@ public class MotherloadMineScript extends Script
         lastLoggedStatus = null;
         shouldEmptySack = false;
 		shouldRepairWaterwheel = false;
+		emptySackWorkflowActive = false;
+    }
+
+    private void executeTaskSafely()
+    {
+        try
+        {
+            executeTask();
+        }
+        catch (Exception ex)
+        {
+            log.error("Unhandled error in MLM main loop; resetting runtime state", ex);
+            abortCurrentWorkflow();
+        }
     }
 
     private void executeTask()
     {
-        if (!super.run() || !Microbot.isLoggedIn())
+        if (!super.run() || !isWorkflowRunnable())
         {
-            log.debug("Execution paused: script not runnable or player not logged in");
-            resetMiningState(true);
+            abortCurrentWorkflow();
             return;
         }
-
-        if (Rs2AntibanSettings.actionCooldownActive) return;
-        if (Rs2Player.isAnimating() || Microbot.getClient().getLocalPlayer().isInteracting()) return;
 
         determineStatusFromInventory();
         logStatusTransitionIfChanged();
@@ -147,21 +160,24 @@ public class MotherloadMineScript extends Script
                 handleMining();
                 break;
             case EMPTY_SACK:
+                if (Rs2Player.isAnimating()) return;
                 Rs2Antiban.setActivityIntensity(ActivityIntensity.EXTREME);
                 emptySack();
                 break;
             case FIXING_WATERWHEEL:
+                if (Rs2Player.isAnimating()) return;
                 fixWaterwheel();
                 break;
             case DEPOSIT_HOPPER:
+                if (Rs2Player.isAnimating()) return;
                 depositHopper();
                 break;
             case DROP_GEMS:
+                if (Rs2Player.isAnimating()) return;
                 dropGems();
                 break;
         }
     }
-
     private String[] SPEC_PICKAXES = {"dragon pickaxe", "crystal pickaxe", "infernal pickaxe"};
 
     private void handlePickaxeSpec() {
@@ -218,7 +234,17 @@ public class MotherloadMineScript extends Script
 
 	private void handleMining()
 	{
-		if (oreVein != null && AntibanPlugin.isMining()) return;
+		if (Rs2Player.getAnimation() != net.runelite.api.AnimationID.IDLE || Rs2Player.isMoving()) {
+			idleSince = 0;
+			return;
+		}
+		if (idleSince == 0) {
+			idleSince = System.currentTimeMillis();
+			idleThreshold = Math.max(2000, Rs2Random.randomGaussian(3000, 600));
+			return;
+		}
+		if (System.currentTimeMillis() - idleSince < idleThreshold) return;
+		idleSince = 0;
 
 		if (Rs2Gembag.isUnknown()) {
 			Rs2Gembag.checkGemBag();
@@ -233,20 +259,12 @@ public class MotherloadMineScript extends Script
 
 		if (isOnSelectedMiningFloor() && findClosestVein() != null && attemptToMineVein())
 		{
-			Rs2Antiban.actionCooldown();
-			Rs2Antiban.takeMicroBreakByChance();
 			return;
 		}
 
 		if (!walkToMiningSpot()) return;
 
-		if (attemptToMineVein())
-		{
-			Rs2Antiban.actionCooldown();
-			Rs2Antiban.takeMicroBreakByChance();
-		} else {
-			oreVein = null;
-		}
+		attemptToMineVein();
 	}
 
 	private boolean isOnSelectedMiningFloor()
@@ -259,30 +277,87 @@ public class MotherloadMineScript extends Script
 
     private void emptySack()
 	{
-        log.info("Emptying sack workflow started");
-		ensureLowerFloor();
-
-		while ((Microbot.getVarbitValue(VarbitID.MOTHERLODE_SACK_TRANSMIT) > 0 || hasOreInInventory()) && isRunning())
+		if (!emptySackWorkflowActive)
 		{
-			if (hasOreInInventory())
-			{
-				useDepositBox();
-			}
-            else if (canDropPayDirt()) {
-                depositHopper();
-            }
-			else
-			{
-                rs2TileObjectCache.query().interact(ObjectID.MOTHERLODE_SACK);
-				sleepUntil(this::hasOreInInventory);
-			}
+			emptySackWorkflowActive = true;
+			log.info("Emptying sack workflow started");
 		}
 
+		if (!isWorkflowRunnable())
+		{
+			abortCurrentWorkflow();
+			return;
+		}
+
+		ensureLowerFloor();
+		if (!isWorkflowRunnable())
+		{
+			abortCurrentWorkflow();
+			return;
+		}
+
+		if (Microbot.getVarbitValue(VarbitID.MOTHERLODE_SACK_TRANSMIT) <= 0 && !hasOreInInventory())
+		{
+			completeEmptySackWorkflow();
+			return;
+		}
+
+		if (hasOreInInventory())
+		{
+			useDepositBox();
+			return;
+		}
+
+        if (canDropPayDirt())
+        {
+            depositHopper();
+            return;
+        }
+
+        rs2TileObjectCache.query().interact(ObjectID.MOTHERLODE_SACK);
+		sleepUntil(() -> !isWorkflowRunnable() || hasOreInInventory(), 10_000);
+	}
+
+	private void completeEmptySackWorkflow()
+	{
 		shouldEmptySack = false;
 		shouldRepairWaterwheel = false;
+		emptySackWorkflowActive = false;
 		Rs2Antiban.takeMicroBreakByChance();
 		status = MLMStatus.IDLE;
         log.info("Emptying sack workflow complete");
+	}
+
+	private boolean isWorkflowRunnable()
+	{
+		if (!Microbot.isLoggedIn() || Microbot.pauseAllScripts.get() || Thread.currentThread().isInterrupted())
+		{
+			return false;
+		}
+
+		try
+		{
+			return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+				var player = Microbot.getClient().getLocalPlayer();
+				return player != null && player.getWorldView() != null;
+			}).orElse(false);
+		}
+		catch (RuntimeException ex)
+		{
+			log.debug("Player state unavailable during MLM lifecycle transition", ex);
+			return false;
+		}
+	}
+
+	private void abortCurrentWorkflow()
+	{
+		resetMiningState(true);
+		status = MLMStatus.IDLE;
+		idleSince = 0;
+		shouldEmptySack = false;
+		shouldRepairWaterwheel = false;
+		emptySackWorkflowActive = false;
+		pickedUpHammer = false;
 	}
 
     private boolean hasOreInInventory()
@@ -736,8 +811,7 @@ public class MotherloadMineScript extends Script
 	}
 
 	private void dropHammerIfNeeded() {
-		if (pickedUpHammer) {
-            log.debug("Dropping temporary hammer");
+		if (pickedUpHammer || (!Rs2Equipment.isWearing("hammer") && Rs2Inventory.hasItem("hammer"))) {
 			Rs2Inventory.drop("hammer");
 			sleepUntil(() -> !Rs2Inventory.hasItem("hammer"));
 			pickedUpHammer = false;
