@@ -1,16 +1,17 @@
 package net.runelite.client.plugins.microbot.irkedmlm;
 
+import ch.qos.logback.classic.Level;
 import com.google.inject.Provides;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import javax.inject.Inject;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.LoggerFactory;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.ChatMessage;
+import net.runelite.api.events.VarbitChanged;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.plugins.Plugin;
@@ -19,10 +20,10 @@ import net.runelite.client.plugins.microbot.PluginConstants;
 import net.runelite.client.ui.overlay.OverlayManager;
 
 @PluginDescriptor(
-        name = PluginConstants.MOCROSOFT + "Motherlode Mine",
+        name = PluginConstants.IRKED + "Motherlode Mine",
         description = "A bot that mines paydirt in the motherlode mine",
         tags = {"paydirt", "mine", "motherlode", "mlm", "motherload"},
-        authors = {"Mocrosoft"},
+        authors = {"irkedMATT"},
         version = IrkedMLMPlugin.version,
         minClientVersion = "2.1.0",
         iconUrl = "https://chsami.github.io/Microbot-Hub/IrkedMLMPlugin/assets/icon.png",
@@ -33,12 +34,10 @@ import net.runelite.client.ui.overlay.OverlayManager;
 @Slf4j
 public class IrkedMLMPlugin extends Plugin {
 
-    public static final String version = "1.0.0";
+    public static final String version = "1.4.0";
 
     private static final String CHAT_SACK_WILL_BE_FULL = "your sack will be full";
     private static final String CHAT_SACK_IS_FULL = "your sack is full";
-    private static final Pattern GOLDEN_NUGGET_COUNT =
-            Pattern.compile("find (\\d+) golden nuggets?", Pattern.CASE_INSENSITIVE);
 
     @Inject
     private IrkedMLMConfig config;
@@ -57,14 +56,31 @@ public class IrkedMLMPlugin extends Plugin {
     private final List<WorldPoint> blacklistedCrates = new ArrayList<>();
 
     private EventBus.Subscriber chatMessageSubscriber;
+    private EventBus.Subscriber varbitChangedSubscriber;
 
     @Provides
     IrkedMLMConfig provideConfig(ConfigManager configManager) {
         return configManager.getConfig(IrkedMLMConfig.class);
     }
 
+    /** Package logger for this plugin (script + all sessions inherit it by package name). */
+    private static final String LOG_PACKAGE = "net.runelite.client.plugins.microbot.irkedmlm";
+
+    /**
+     * Debug Mode routes rich context (sub-state transitions, vein selection, sack projections, …) through
+     * {@code log.debug} across the script and every session. Those only surface if this package's logger
+     * is at DEBUG — the client defaults to INFO, so toggling the config alone was a silent no-op. Setting
+     * the level here is the single point that makes every {@code log.debug} call visible. Applied on
+     * startUp from the current config; toggling live requires restarting the plugin.
+     */
+    private void applyDebugLogLevel(boolean debug) {
+        ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(LOG_PACKAGE))
+                .setLevel(debug ? Level.DEBUG : Level.INFO);
+    }
+
     @Override
     protected void startUp() {
+        applyDebugLogLevel(config.debugMode());
         log.info("Starting Motherload Mine v{} — sack size: {}", version, config.sackSize());
         if (overlayManager != null) {
             overlayManager.add(IrkedMLMOverlay);
@@ -72,6 +88,7 @@ public class IrkedMLMPlugin extends Plugin {
         }
         // Manual registration avoids LambdaConversionException with @Subscribe on some builds.
         chatMessageSubscriber = eventBus.register(ChatMessage.class, this::onChatMessage, 0.0f);
+        varbitChangedSubscriber = eventBus.register(VarbitChanged.class, this::onVarbitChanged, 0.0f);
         IrkedMLMScript.run();
         log.info("Motherload Mine startup complete");
     }
@@ -84,47 +101,35 @@ public class IrkedMLMPlugin extends Plugin {
             eventBus.unregister(chatMessageSubscriber);
             chatMessageSubscriber = null;
         }
+        if (varbitChangedSubscriber != null) {
+            eventBus.unregister(varbitChangedSubscriber);
+            varbitChangedSubscriber = null;
+        }
         if (overlayManager != null) {
             overlayManager.remove(IrkedMLMOverlay);
             overlayManager.remove(IrkedMLMAreaOverlay);
         }
         blacklistedCrates.clear();
+        applyDebugLogLevel(false); // restore default level so a DEBUG override doesn't leak past shutdown
         log.info("Motherload Mine shutdown complete");
     }
 
     private void onChatMessage(ChatMessage event) {
-        if (event.getType() != ChatMessageType.GAMEMESSAGE) {
-            return;
-        }
-        String msg = event.getMessage();
-        String lower = msg.toLowerCase();
+        ChatMessageType type = event.getType();
+        String lower = event.getMessage().toLowerCase();
 
-        if (lower.contains(CHAT_SACK_WILL_BE_FULL) || lower.contains(CHAT_SACK_IS_FULL)) {
+        // Golden-nugget totals are tracked from the inventory count in the script (monotonic, no
+        // reliable chat message fires on sack withdraw), so chat parsing is only used for the
+        // sack-full early warning here.
+        if (type == ChatMessageType.GAMEMESSAGE
+                && (lower.contains(CHAT_SACK_WILL_BE_FULL) || lower.contains(CHAT_SACK_IS_FULL))) {
             IrkedMLMScript.setSackIsFull(true);
-            return;
-        }
-
-        if (lower.contains("golden nugget")) {
-            IrkedMLMScript.addGainedNuggets(parseGoldenNuggetCount(msg));
         }
     }
 
-    static int parseGoldenNuggetCount(String message) {
-        if (message == null || message.isEmpty()) {
-            return 1;
+    private void onVarbitChanged(VarbitChanged event) {
+        if (event.getVarbitId() == IrkedMLMScript.SACK_COUNT_VARBIT) {
+            IrkedMLMScript.onSackVarbitChanged(event.getValue());
         }
-        String lower = message.toLowerCase();
-        if (lower.contains("a golden nugget")) {
-            return 1;
-        }
-        Matcher matcher = GOLDEN_NUGGET_COUNT.matcher(lower);
-        if (matcher.find()) {
-            try {
-                return Math.max(1, Integer.parseInt(matcher.group(1)));
-            } catch (NumberFormatException ignored) {
-                return 1;
-            }
-        }
-        return 1;
     }
 }

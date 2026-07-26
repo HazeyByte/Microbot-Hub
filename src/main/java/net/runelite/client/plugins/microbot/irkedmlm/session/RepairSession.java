@@ -8,8 +8,10 @@ import net.runelite.api.gameval.ObjectID;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.api.tileobject.Rs2TileObjectCache;
 import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectModel;
+import net.runelite.client.plugins.microbot.irkedmlm.HumanBehaviorProfile;
 import net.runelite.client.plugins.microbot.irkedmlm.IrkedMLMMapConstants;
 import net.runelite.client.plugins.microbot.irkedmlm.IrkedMLMConfig;
+import net.runelite.client.plugins.microbot.util.camera.Rs2Camera;
 import net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
@@ -67,9 +69,6 @@ public class RepairSession extends Session {
     @Getter
     private RepairSubState repairSubState = RepairSubState.IDLE;
 
-    @Getter
-    private boolean ownsHammer = false;
-
     private final Rs2TileObjectCache tileCache;
 
     private WorldPoint targetStrutPoint;
@@ -85,6 +84,10 @@ public class RepairSession extends Session {
     private boolean animStartObserved = false;
     private boolean postRepairPaused = false;
 
+    /** When true, do not back off for players standing near the wheel — the orchestrator has
+     *  determined (via a deferral timeout) that the bystander is idle, not repairing. */
+    private boolean ignoreNearbyPlayers = false;
+
     private final IrkedMLMConfig config;
 
     public RepairSession(Rs2TileObjectCache tileCache, IrkedMLMConfig config) {
@@ -97,7 +100,6 @@ public class RepairSession extends Session {
     public void reset() {
         super.reset();
         repairSubState      = RepairSubState.IDLE;
-        ownsHammer          = false;
         repairAttempts      = 0;
         crateSearchAttempts = 0;
         targetStrutPoint    = null;
@@ -105,7 +107,21 @@ public class RepairSession extends Session {
         brokenBeforeClick   = -1;
         animStartObserved   = false;
         postRepairPaused    = false;
+        ignoreNearbyPlayers = false;
         // lastRepairedStrutPoint intentionally persists (for wheel swap); cleared only on new instance.
+    }
+
+    /**
+     * @param ignoreNearby when true, the session will not defer to players standing near the wheel
+     *                     (the orchestrator decided they are idle, not repairing).
+     */
+    public void begin(boolean ignoreNearby) {
+        if (!isIdle()) {
+            log.warn("[RepairSession] begin() called while not idle");
+            return;
+        }
+        this.ignoreNearbyPlayers = ignoreNearby;
+        begin();
     }
 
     @Override
@@ -128,6 +144,11 @@ public class RepairSession extends Session {
     private static final long STALL_THRESHOLD_MS = 5000L;
 
     @Override
+    protected long postLadderSettleDelayMs() {
+        return HumanBehaviorProfile.repairPostLadderSettleDelayMs(isHumanLikeEnabled());
+    }
+
+    @Override
     protected void tickInternal() {
         switch (repairSubState) {
 
@@ -140,7 +161,9 @@ public class RepairSession extends Session {
                 break;
 
             case TRANSITIONING_FLOOR:
-                if (Rs2Player.isMoving() || Rs2Player.isAnimating(5000)) {
+                // 1200ms (~2 ticks) not 5000ms: the old guard idled here for a full 5s after the climb,
+                // stacking with the notice + settle delays into the ~11s "waited before clicking the crate".
+                if (Rs2Player.isMoving() || Rs2Player.isAnimating(1200)) {
                     scheduleNextAdaptive(180L, 600L);
                     break;
                 }
@@ -212,7 +235,6 @@ public class RepairSession extends Session {
             return;
         }
         if (hasHammer()) {
-            ownsHammer = false;
             selectTargetStrut();
 
             if (isObjectInScene(STRUT_ID)) {
@@ -228,7 +250,6 @@ public class RepairSession extends Session {
 
     private void tickNeedHammer() {
         if (hasHammer()) {
-            ownsHammer = false;
             selectTargetStrut();
             transitionSub(RepairSubState.WALK_TO_STRUT);
             return;
@@ -305,11 +326,19 @@ public class RepairSession extends Session {
             return;
         }
 
+        // On-screen before clicking so the natural mouse glides onto the crate instead of the (1,1)
+        // corner fallback in Microbot.doInvoke.
+        if (!Rs2Camera.isTileOnScreen(crate.getLocalLocation())) {
+            Rs2Camera.turnTo(crate);
+            scheduleNextAdaptive(150L, 450L);
+            return;
+        }
+
         log.debug("[RepairSession] Searching crate (ID: {})", SUPPLY_CRATE_ID);
         if (crate.click("Search")) {
             applyActionCooldown();
             crateSearchAttempts++;
-            scheduleNextAdaptive(400L, 1800L);
+            scheduleNextAdaptive(350L, 1000L);
             transitionSub(RepairSubState.FETCH_HAMMER_VERIFY);
             return;
         }
@@ -322,9 +351,18 @@ public class RepairSession extends Session {
 
     private void tickFetchHammerVerify() {
         if (hasHammer()) {
-            ownsHammer = true;
             selectTargetStrut();
             transitionSub(RepairSubState.WALK_TO_STRUT);
+            return;
+        }
+        // Give the search time to resolve before deciding to search again — one search yields the
+        // hammer a tick or two later. Re-clicking immediately is what double-searched the crate.
+        if (Rs2Player.isInteracting() || Rs2Player.isAnimating() || Rs2Player.isMoving()) {
+            scheduleNextAdaptive(180L, 600L);
+            return;
+        }
+        if (subElapsed() < 1800L) {
+            scheduleNextAdaptive(180L, 600L);
             return;
         }
         if (crateSearchAttempts < MAX_CRATE_SEARCHES) {
@@ -410,6 +448,15 @@ public class RepairSession extends Session {
         var target = findStrutAt(targetStrutPoint, targetStrutId);
         if (target == null) {
             transitionSub(RepairSubState.WALK_TO_STRUT);
+            return;
+        }
+
+        // Ensure the strut is actually on-screen before clicking. Otherwise its clickbox is off-canvas
+        // and Microbot.doInvoke falls back to clicking the (1,1) corner instead of gliding the natural
+        // mouse onto the strut. Turn the camera and retry next tick (mirrors MiningSession's vein click).
+        if (!Rs2Camera.isTileOnScreen(target.getLocalLocation())) {
+            Rs2Camera.turnTo(target);
+            scheduleNextAdaptive(150L, 450L);
             return;
         }
 
@@ -499,10 +546,9 @@ public class RepairSession extends Session {
             return;
         }
 
-        if (Rs2Inventory.hasItem("hammer")) {
+        if (Rs2Inventory.hasItem(ItemID.HAMMER, ItemID.IMCANDO_HAMMER)) {
             log.debug("[RepairSession] Cleanup: dropping hammer");
-            Rs2Inventory.drop(ItemID.HAMMER);
-            ownsHammer = false;
+            Rs2Inventory.dropAll(ItemID.HAMMER, ItemID.IMCANDO_HAMMER);
             scheduleNext(1200L);
             return;
         }
@@ -536,8 +582,7 @@ public class RepairSession extends Session {
                 }
             }
             if (!otherWheel.isEmpty()) {
-                java.util.Collections.shuffle(otherWheel, new java.util.Random(System.nanoTime()));
-                chosen = otherWheel.get(0);
+                chosen = otherWheel.get(Rs2Random.between(0, otherWheel.size() - 1));
                 targetStrutPoint = chosen.getWorldLocation();
                 targetStrutId    = chosen.getId();
                 log.info("[RepairSession] Selected strut from OTHER waterwheel (swap) at {} (last was {})",
@@ -546,8 +591,7 @@ public class RepairSession extends Session {
             }
         }
 
-        java.util.Collections.shuffle(struts, new java.util.Random(System.nanoTime()));
-        chosen = struts.get(0);
+        chosen = struts.get(Rs2Random.between(0, struts.size() - 1));
         targetStrutPoint = chosen.getWorldLocation();
         targetStrutId    = chosen.getId();
         log.debug("[RepairSession] Selected random strut at {} (ID: {}) from {} options",
@@ -567,7 +611,8 @@ public class RepairSession extends Session {
     }
 
     private boolean hasHammer() {
-        return Rs2Equipment.isWearing("hammer") || Rs2Inventory.hasItem("hammer");
+        return Rs2Equipment.isWearing(ItemID.HAMMER, ItemID.IMCANDO_HAMMER)
+                || Rs2Inventory.hasItem(ItemID.HAMMER, ItemID.IMCANDO_HAMMER);
     }
 
     /**
@@ -575,6 +620,10 @@ public class RepairSession extends Session {
      * Checks for any non-local player within 5 tiles of the waterwheel area.
      */
     private boolean isAnotherPlayerRepairing() {
+        // Orchestrator decided the nearby player is idle (deferral timed out) — take over the repair.
+        if (ignoreNearbyPlayers) {
+            return false;
+        }
         // Name is pushed from IrkedMLMScript (no client thread fetch in session)
         WorldPoint strutArea = IrkedMLMMapConstants.WATERWHEEL_AREA;
 

@@ -15,4 +15,8 @@ public enum MLMSackSize {
     public String toString() {
         return name;
     }
+
+    public static MLMSackSize forPlayer() {
+        return net.runelite.client.plugins.microbot.Microbot.getVarbitValue(5556) > 0 ? UPGRADED : STANDARD;
+    }
 }

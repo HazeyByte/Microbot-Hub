@@ -5,8 +5,10 @@ import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigInformation;
 import net.runelite.client.config.ConfigItem;
 import net.runelite.client.config.ConfigSection;
+import net.runelite.client.plugins.microbot.irkedmlm.enums.AfkParkSide;
 import net.runelite.client.plugins.microbot.irkedmlm.enums.MLMMiningSpot;
 import net.runelite.client.plugins.microbot.irkedmlm.enums.MLMSackSize;
+import net.runelite.client.plugins.microbot.irkedmlm.enums.MouseActivity;
 
 @ConfigGroup(IrkedMLMConfig.configGroup)
 @ConfigInformation(
@@ -15,7 +17,7 @@ import net.runelite.client.plugins.microbot.irkedmlm.enums.MLMSackSize;
 )
 public interface IrkedMLMConfig extends Config
 {
-	String configGroup = "micro-motherloadmine";
+	String configGroup = "micro-irkedmlm";
 
 	String useDepositAll = "useDepositAll";
 	String antiCrash = "antiCrash";
@@ -27,6 +29,8 @@ public interface IrkedMLMConfig extends Config
 	String showMiningAreas = "showMiningAreas";
 	String useGemBag = "useGemBag";
 	String enableHumanLikeBehavior = "enableHumanLikeBehavior";
+	String afkParkSide = "afkParkSide";
+	String mouseActivity = "mouseActivity";
 
 	@ConfigSection(
 			name = "Core Settings",
@@ -51,11 +55,11 @@ public interface IrkedMLMConfig extends Config
 
 	@ConfigSection(
 			name = "Humanization",
-			description = "Master toggle for MLM-specific human-like behavior (our custom pauses, jitter, attention variation, imperfection). " +
-					"Separate from the global Rs2Antiban plugin (you can disable that globally if desired). " +
-					"When enabled: 'sometimes fast (full-attention quick reaction) sometimes not (relaxed full random)' is baked naturally; urgent situations (sack full at start, will-fill post-deposit, repair needed after deposit) bias toward quicker responses. " +
-					"When disabled: no script pauses, faster tick rate, minimal session throttles, no antiban action-cooldown blocking + optimal choices (best vein, repair even 1 strut, exact 5 min spot refresh with no jitter, no extra glances/admire/pre-deposit, etc.). " +
-					"Full list of gated behaviors and exact rules in the plugin's docs/README.md.",
+			description = "Master toggle for the MLM-specific human layer: randomized pauses, varied mouse behaviour " +
+					"(occasional off-screen AFK, hovering the next vein as one nears depletion, non-centred click points), " +
+					"spot jitter, hesitation, and a delayed/randomized pickaxe special. Separate from the global Rs2Antiban plugin. " +
+					"Turn OFF for maximum speed: faster tick, no script pauses, no antiban action-cooldown blocking (mouse click points " +
+					"stay randomized either way). Full details in the plugin's docs/README.md.",
 			position = 3
 
 	)
@@ -74,6 +78,11 @@ public interface IrkedMLMConfig extends Config
 	default MLMMiningSpot miningArea()
 	{
 		return MLMMiningSpot.WEST_LOWER;
+	}
+
+	default MLMMiningSpot miningSpot()
+	{
+		return miningArea();
 	}
 
 	@ConfigItem(
@@ -184,19 +193,65 @@ public interface IrkedMLMConfig extends Config
 		return false;
 	}
 
+	@ConfigItem(
+			keyName = "repairStruts",
+			name = "Repair Struts",
+			description = "Repair the broken water-wheel struts, but only on a deposit trip — right after emptying " +
+					"pay-dirt into the hopper, when the wheel is stopped and no other player is already fixing it. " +
+					"The bot won't break off mining, banking, or recovery just to run to the wheel.",
+			position = 4,
+			section = generalSection
+	)
+	default boolean repairStruts()
+	{
+		return true;
+	}
+
 	// Humanization (master toggle for our custom likeness layer)
 	@ConfigItem(
 			keyName = enableHumanLikeBehavior,
 			name = "Human-like behavior",
-			description = "Enable our MLM-specific human likeness (random waits, occasional imperfection/hesitation/glances, spot jitter, 1-strut 90% skip chance, post-repair admire, pre-deposit extra, etc.). " +
-					"The variation ('sometimes fast sometimes not') and urgent bias are natural to the implementation — no separate % slider. " +
-					"Turn off for small consistent delays + optimal choices (still has life, not robotic). Distinct from global Rs2Antiban toggle.",
+			description = "ON: randomized waits, mixed mouse behaviour (off-screen AFK, hover the next vein near depletion, " +
+					"non-centred click points), spot jitter, hesitation, 1-strut 90% skip, and a delayed/randomized special attack. " +
+					"OFF: FAST — minimal delays and optimal choices, but click points stay randomized so it isn't pixel-perfect. " +
+					"Distinct from the global Rs2Antiban toggle.",
 			position = 0,
 			section = humanSection
 	)
 	default boolean enableHumanLikeBehavior()
 	{
 		return true;
+	}
+
+	@ConfigItem(
+			keyName = afkParkSide,
+			name = "AFK Park Side",
+			description = "Which edge the mouse parks off (and returns from) during off-screen AFK, modelling the game on a " +
+					"second monitor.<br/>" +
+					"LEFT / RIGHT: match your physical second-monitor position — the cursor only ever crosses that edge.<br/>" +
+					"RANDOM: pick one side per login and keep it consistent for the whole session.<br/>" +
+					"Only applies when Human-like behavior is ON.",
+			position = 1,
+			section = humanSection
+	)
+	default AfkParkSide afkParkSide()
+	{
+		return AfkParkSide.RANDOM;
+	}
+
+	@ConfigItem(
+			keyName = mouseActivity,
+			name = "Mouse Activity",
+			description = "How much the cursor stays on the game screen while mining (Human-like ON only).<br/>" +
+					"AFK: click the vein, then park off-screen — minimal on-screen time (best for an AFK skill like MLM).<br/>" +
+					"BALANCED: mostly off-screen, but sometimes hovers the next vein or leaves the cursor on-screen.<br/>" +
+					"ACTIVE: stays on-screen and lines up the next vein, like an attentive watching player.",
+			position = 2,
+			section = humanSection
+	)
+	default MouseActivity mouseActivity()
+	{
+		return MouseActivity.AFK;
 	}
 
 }

@@ -2,10 +2,14 @@ package net.runelite.client.plugins.microbot.irkedmlm.session;
 
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.client.plugins.microbot.irkedmlm.HumanBehaviorProfile;
 import net.runelite.client.plugins.microbot.irkedmlm.IrkedMLMConfig;
 import net.runelite.client.plugins.microbot.util.antiban.Rs2Antiban;
+import net.runelite.client.plugins.microbot.util.camera.Rs2Camera;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
+import net.runelite.api.Perspective;
+import net.runelite.api.coords.LocalPoint;
 
 import static net.runelite.client.plugins.microbot.util.Global.sleepUntil;
 
@@ -93,6 +97,14 @@ public abstract class Session {
     protected String cachedLocalPlayerName = "";
 
     /**
+     * Per-login behavioural identity, pushed from the orchestrator script (same pattern as the player
+     * name). Defaults to a neutral/average player so timing/odds match the original hard-coded constants
+     * until a real personality is rolled at login. Never null.
+     */
+    protected net.runelite.client.plugins.microbot.irkedmlm.SessionPersonality personality =
+            net.runelite.client.plugins.microbot.irkedmlm.SessionPersonality.neutral();
+
+    /**
      * Injected config reference (for human-like behavior gating).
      * Subclasses that need per-decision human checks (vein selection, 1-strut skip, admire, etc.)
      * call isHumanLikeEnabled(). Base uses it for ladder hesitation.
@@ -121,9 +133,38 @@ public abstract class Session {
         return config != null && config.enableHumanLikeBehavior();
     }
 
-    /** Milliseconds to wait before the next action (fast vs human-like). */
+    /** Milliseconds to wait before the next action (fast vs human-like), with timing variation applied. */
     protected long tickDelayMs(long fastMs, long humanMs) {
-        return isHumanLikeEnabled() ? humanMs : fastMs;
+        return jitter(isHumanLikeEnabled() ? humanMs : fastMs);
+    }
+
+    /**
+     * Adds timing variation to a base delay so actions never fire on a fixed cadence.
+     * <ul>
+     *   <li>Fast mode: tight ±10% — still "sure fast", just not a perfect metronome
+     *       (a perfectly periodic click cadence is itself a detection signal).</li>
+     *   <li>Human mode: wide 0.65x–1.35x band, with a 12% chance of a 1.5x–2.2x slow
+     *       outlier (glance away / distraction) so speeds are genuinely mixed.</li>
+     * </ul>
+     * Safety timeouts and stall detectors use raw literals (not this path), so they are
+     * unaffected; spam guards keep their floor because fast jitter never drops below 0.9x.
+     */
+    private long jitter(long baseMs) {
+        if (baseMs <= 0) {
+            return baseMs;
+        }
+        if (!isHumanLikeEnabled()) {
+            return Rs2Random.between((int) (baseMs * 0.90), (int) (baseMs * 1.10) + 1);
+        }
+        // Reaction speed, slow-outlier likelihood, and band width are all this player's fixed traits,
+        // so a "fast, confident" run stays snappy and a "slow, relaxed" run stays languid all session.
+        long scaled = personality.reaction(baseMs);
+        if (Rs2Random.between(0, 100) < personality.slowOutlierChance()) {
+            return Rs2Random.between((int) (scaled * 1.5), (int) (scaled * 2.2) + 1);
+        }
+        return Rs2Random.between(
+                (int) (scaled * personality.jitterLow()),
+                (int) (scaled * personality.jitterHigh()) + 1);
     }
 
     protected void scheduleNextAdaptive(long fastMs, long humanMs) {
@@ -132,12 +173,8 @@ public abstract class Session {
 
     /** Minimum pause after sub-state changes so fast mode does not mass-click. */
     protected void scheduleSubStateEntryDelay() {
-        scheduleNextAdaptive(200L, 400L);
-    }
-
-    /** @deprecated use {@link #scheduleSubStateEntryDelay()} */
-    protected void clearActionGateOnFastMode() {
-        scheduleSubStateEntryDelay();
+        // Fast floor lowered to ~90ms so human-like OFF is genuinely fast between sub-states.
+        scheduleNextAdaptive(90L, 400L);
     }
 
     // ------------------------------------------------------------------
@@ -158,10 +195,9 @@ public abstract class Session {
         boolean result = net.runelite.client.plugins.microbot.Microbot.getClientThread().runOnClientThreadOptional(() -> {
             net.runelite.api.Client client = net.runelite.client.plugins.microbot.Microbot.getClient();
             if (client == null || client.getLocalPlayer() == null) return false;
-            int height = net.runelite.api.Perspective.getTileHeight(
-                    client,
-                    client.getLocalPlayer().getLocalLocation(),
-                    client.getLocalPlayer().getWorldLocation().getPlane());
+            LocalPoint localLoc = client.getLocalPlayer().getLocalLocation();
+            if (localLoc == null) return false;
+            int height = Perspective.getTileHeight(client, localLoc, 0);
             return height < UPPER_FLOOR_HEIGHT_THRESHOLD;
         }).orElse(false);
         lastUpperFloorCheckMs = now;
@@ -206,6 +242,12 @@ public abstract class Session {
         this.cachedLocalPlayerName = (name != null) ? name : "";
     }
 
+    public void updatePersonality(net.runelite.client.plugins.microbot.irkedmlm.SessionPersonality p) {
+        if (p != null) {
+            this.personality = p;
+        }
+    }
+
     protected void climbUp() {
         if (Rs2Player.isMoving() || Rs2Player.isAnimating(1200)) {
             scheduleNext(600L);
@@ -230,6 +272,17 @@ public abstract class Session {
             return;
         }
 
+        // The ladder clickbox must be on-screen before we click it. Otherwise the natural mouse has
+        // no on-canvas target and Microbot.doInvoke falls back to clicking the (1,1) corner — which
+        // silently misses the ladder every time. Same guard the vein (MiningSession) and strut
+        // (RepairSession) clicks use; turn the camera and retry next tick.
+        if (!Rs2Camera.isTileOnScreen(ladder.getLocalLocation())) {
+            log.debug("[Session] Ladder-up off-screen — turning camera");
+            Rs2Camera.turnTo(ladder);
+            scheduleNext(Rs2Random.between(150, 450));
+            return;
+        }
+
         log.info("[Session] Climbing up ladder");
 
         int hesitation;
@@ -247,7 +300,7 @@ public abstract class Session {
             applyActionCooldown();
             // Give time for anim to start + floor height to update in client state.
             // Rely on isAnimating in subsequent ticks + state machine, not our click timestamp.
-            scheduleNext(isHumanLikeEnabled() ? 4000L : 900L);
+            scheduleNext(postLadderSettleDelayMs());
         }
     }
 
@@ -280,6 +333,15 @@ public abstract class Session {
             return;
         }
 
+        // See climbUp(): the ladder must be on-screen or the natural mouse clicks the (1,1) corner
+        // and misses. Turn the camera and retry next tick.
+        if (!Rs2Camera.isTileOnScreen(ladder.getLocalLocation())) {
+            log.debug("[Session] Ladder-down off-screen — turning camera");
+            Rs2Camera.turnTo(ladder);
+            scheduleNext(Rs2Random.between(150, 450));
+            return;
+        }
+
         log.info("[Session] Climbing down ladder");
 
         int hesitation;
@@ -295,8 +357,12 @@ public abstract class Session {
 
         if (ladder.click("Climb-down")) {
             applyActionCooldown();
-            scheduleNext(isHumanLikeEnabled() ? 4000L : 900L);
+            scheduleNext(postLadderSettleDelayMs());
         }
+    }
+
+    protected long postLadderSettleDelayMs() {
+        return HumanBehaviorProfile.postLadderSettleDelayMs(isHumanLikeEnabled());
     }
 
     // ------------------------------------------------------------------

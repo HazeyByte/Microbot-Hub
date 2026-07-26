@@ -51,6 +51,7 @@ public class IrkedMLMOverlay extends Overlay {
 
     private final IrkedMLMScript script;
     private final ItemManager itemManager;
+    private final java.util.Map<Integer, BufferedImage> imageCache = new java.util.HashMap<>();
 
     @Inject
     public IrkedMLMOverlay(IrkedMLMPlugin plugin, IrkedMLMScript script) {
@@ -83,6 +84,10 @@ public class IrkedMLMOverlay extends Overlay {
                 snap.getGoldCount(),
                 snap.getCoalCount()
         };
+
+        // Golden nuggets owned = inventory + bank (tracked by the script). Counting both containers is
+        // robust to Deposit-All banking the nuggets, which is why an inventory-only count showed nothing.
+        int sessionNuggets = snap.getGainedNuggets();
 
         // ── Total height calculation ──────────────────────────────────────────
         int totalH = PAD_Y                          // top gap
@@ -160,7 +165,7 @@ public class IrkedMLMOverlay extends Overlay {
 
         curY += 4;  // move nuggets row down slightly for better spacing
         curY = drawRow(g, curY, labelFont, boldFont,
-                "Nuggets", String.valueOf(snap.getGainedNuggets()));
+                "Nuggets", String.valueOf(sessionNuggets));
 
         // ── Divider ───────────────────────────────────────────────────────────
         curY = drawDivider(g, curY);
@@ -236,8 +241,15 @@ public class IrkedMLMOverlay extends Overlay {
     }
 
     private BufferedImage getItemImage(int itemId) {
+        if (imageCache.containsKey(itemId)) {
+            return imageCache.get(itemId);
+        }
         try {
-            return itemManager.getImage(itemId, 1, false);
+            BufferedImage img = itemManager.getImage(itemId, 1, false);
+            if (img != null) {
+                imageCache.put(itemId, img);
+            }
+            return img;
         } catch (Exception e) {
             return null;
         }

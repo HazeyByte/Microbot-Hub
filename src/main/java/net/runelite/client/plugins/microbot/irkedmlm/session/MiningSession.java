@@ -2,6 +2,7 @@ package net.runelite.client.plugins.microbot.irkedmlm.session;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -10,14 +11,22 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import java.awt.Rectangle;
+import java.awt.Shape;
+import net.runelite.api.Point;
 import net.runelite.api.coords.WorldArea;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.widgets.Widget;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.api.tileobject.Rs2TileObjectCache;
 import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectModel;
 import net.runelite.client.plugins.microbot.irkedmlm.IrkedMLMMapConstants;
 import net.runelite.client.plugins.microbot.irkedmlm.IrkedMLMConfig;
+import net.runelite.client.plugins.microbot.irkedmlm.SessionPersonality;
+import net.runelite.client.plugins.microbot.irkedmlm.enums.AfkParkSide;
 import net.runelite.client.plugins.microbot.irkedmlm.enums.MLMMiningSpot;
+import net.runelite.client.plugins.microbot.irkedmlm.enums.MouseActivity;
 import net.runelite.client.plugins.microbot.util.camera.Rs2Camera;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
@@ -59,16 +68,21 @@ public class MiningSession extends Session {
      * We use IDs rather than withName("Ore vein") because the internal name
      * can differ from the menu target, causing cache misses.
      *
-     * Per gamevals (ObjectID.java): active veins have distinct IDs from the
-     * MOTHERLODE_DEPLETED_* variants. We must NOT include depleted IDs here.
-     * Name checks (isActiveVein) are kept as a defensive fallback.
+     * We now hard-code the proven active vein IDs (26661-26664) that the reference
+     * motherloadmine implementation and live game use. The symbolic ObjectID.MOTHERLODE_ORE_*
+     * constants are still logged at startup for investigation but are no longer the source
+     * of truth for filtering (they can be out of sync with the live game across client versions).
      */
-    private static final int[] ORE_VEIN_IDS = {
-            ObjectID.MOTHERLODE_ORE_SINGLE,
-            ObjectID.MOTHERLODE_ORE_LEFT,
-            ObjectID.MOTHERLODE_ORE_MIDDLE,
-            ObjectID.MOTHERLODE_ORE_RIGHT
-    };
+    /**
+     * Active (non-depleted) ore vein object IDs in Motherlode Mine.
+     * These are the canonical values used across MLM plugins (confirmed in the reference
+     * motherloadmine implementation and observed in live MenuEntry logs: 26663 etc.).
+     * We hardcode the numbers (matching the stable reference) rather than relying solely
+     * on the symbolic ObjectID.MOTHERLODE_ORE_* gamevals, because the constants can lag
+     * or resolve differently across client versions/updates. Both single-wall and the
+     * left/middle/right shaped veins are covered by this set.
+     */
+    private static final int[] ORE_VEIN_IDS = { 26661, 26662, 26663, 26664 };
 
     /** Object IDs for rockfalls (collapsed tunnels) in Motherload Mine. */
     private static final int[] ROCKFALL_IDS = {26679, 26680};
@@ -89,6 +103,24 @@ public class MiningSession extends Session {
     /** Timestamp of the last issued walk command. */
     private long lastWalkCommandMs = 0L;
     private long lastMineClickMs = 0L;
+    private boolean afkMouseOffscreen = false;
+    /** Early per-vein mouse decision (AFK off-screen / rare early hover / leave) made once. */
+    private boolean boutMouseDecided = false;
+    /** Whether we've already pre-hovered the next vein this bout (prevents per-tick re-rolls). */
+    private boolean hoverDoneThisBout = false;
+    /** ms of continuous mining after which pre-hovering the next vein is natural (proxy for "nearly depleted"). */
+    private long hoverEligibleAfterMs = 0L;
+    /** Wall-clock throttle for ambient attention (inventory-glance / comfort-camera) so it never metronomes. */
+    private long lastAmbientAttentionMs = 0L;
+    private static final long AMBIENT_ATTENTION_COOLDOWN_MS = 25_000L;
+    /** Resolved AFK off-screen park edge for this login: -1 = left, +1 = right, 0 = not yet resolved.
+     *  Off-screen AFK models the game on a second monitor, so the cursor only ever crosses one edge. */
+    private int afkExitSign = 0;
+
+    /** Player must be this close (tiles) for the "just mine the rock next to me" nearest-vein rule.
+     *  Set to 4 (was 2) so veins directly behind/beside the player in the stand area win over a
+     *  higher-scored cluster around the corner — a human mines the rock next to them, not the far "better" one. */
+    private static final int ADJACENT_DIST = 4;
 
     /** Session-long memory of rockfall tiles. Even if another player mines a rockfall,
      *  we continue to treat those tiles as blocked for the remainder of the session. */
@@ -121,14 +153,22 @@ public class MiningSession extends Session {
     private static final int SCORE_CLUSTER_BONUS_CAP = 9;
 
     /** No mining activity after click — mark vein failed (human "that one didn't work"). */
-    private static final long CONFIRMED_FAIL_MS_FAST   = 8_000L;
-    private static final long CONFIRMED_FAIL_MS_HUMAN  = 8_000L;
+    private static final long CONFIRMED_FAIL_MS     = 8_000L;
 
     private final Rs2TileObjectCache   tileCache;
 
     public MiningSession(Rs2TileObjectCache tileCache, IrkedMLMConfig config) {
         super(config);
         this.tileCache = tileCache;
+
+        // Investigation aid for gamevals: log what the symbolic MOTHERLODE_ORE_* constants
+        // actually resolve to in this client version. The numeric list above (26661-26664)
+        // is the authoritative set from live observation + the reference motherloadmine impl.
+        log.info("[MiningSession] MLM ore vein gamevals (for reference): SINGLE={}, LEFT={}, MIDDLE={}, RIGHT={}",
+                ObjectID.MOTHERLODE_ORE_SINGLE,
+                ObjectID.MOTHERLODE_ORE_LEFT,
+                ObjectID.MOTHERLODE_ORE_MIDDLE,
+                ObjectID.MOTHERLODE_ORE_RIGHT);
     }
 
     @Override
@@ -141,8 +181,276 @@ public class MiningSession extends Session {
         sessionLockUntil  = 0L;
         lastWalkCommandMs = 0L;
         lastMineClickMs     = 0L;
+        afkMouseOffscreen = false;
+        boutMouseDecided = false;
+        hoverDoneThisBout = false;
+        hoverEligibleAfterMs = 0L;
+        lastAmbientAttentionMs = 0L;
         rememberedRockfalls.clear();
         recentFailures.clear(); // full clear on reset (recovery/hard resolve) so stale per-vein blacklists don't prevent resolving
+        // NOTE: afkExitSign is deliberately NOT reset here — reset() runs on mid-session recovery, and the
+        // AFK park side must stay consistent for the whole login. It re-rolls per login in updatePersonality().
+    }
+
+    @Override
+    public void updatePersonality(SessionPersonality p) {
+        super.updatePersonality(p);
+        afkExitSign = 0; // new login → re-resolve the RANDOM park side
+    }
+
+    /** Bring the virtual mouse back after an AFK off-screen bout. Usually we do NOT pre-move: the very
+     *  next interaction (the Mine click on the chosen vein, or a hopper/sack click) pulls the cursor
+     *  straight onto the thing it needs to click — a human glancing back and going right for the rock.
+     *  But not always: ~25% of the time we bring the mouse roughly back onto the canvas first, as if
+     *  reaching for it before deciding where to click. */
+    private void ensureMouseInGame() {
+        if (!afkMouseOffscreen) {
+            return;
+        }
+        afkMouseOffscreen = false;
+        if (Rs2Random.between(0, 100) < 25) {
+            // Re-enter from the SAME edge we parked on (a player reaching back from their side monitor),
+            // a little way in. The other 75% of the time the next real click pulls the cursor in from that
+            // edge naturally, which is already consistent because it's parked just off that side.
+            int w = Microbot.getClient().getCanvasWidth();
+            int h = Microbot.getClient().getCanvasHeight();
+            int margin = Math.max(3, w / 5);
+            int x = afkExitSign() < 0
+                    ? Rs2Random.between(2, margin)
+                    : Rs2Random.between(Math.max(2, w - margin), Math.max(3, w - 1));
+            int y = Rs2Random.between(Math.max(1, h / 6), Math.max(2, h - h / 6));
+            Microbot.naturalMouse.moveTo(x, y);
+        }
+    }
+
+    /**
+     * The canvas edge this login parks the AFK cursor off: -1 = left, +1 = right. LEFT/RIGHT come straight
+     * from config (the player's physical second-monitor side); RANDOM resolves once per login and is cached
+     * so the side stays consistent for the whole session (re-rolled on the next login via updatePersonality).
+     */
+    private int afkExitSign() {
+        AfkParkSide side = config != null ? config.afkParkSide() : AfkParkSide.RANDOM;
+        if (side == AfkParkSide.LEFT) {
+            return -1;
+        }
+        if (side == AfkParkSide.RIGHT) {
+            return 1;
+        }
+        if (afkExitSign == 0) {
+            afkExitSign = Rs2Random.between(0, 2) == 0 ? -1 : 1;
+        }
+        return afkExitSign;
+    }
+
+    /**
+     * Park the virtual mouse just off one canvas edge (AFK on a second monitor). Unlike the shared
+     * {@code naturalMouse.moveOffScreen()} — which picks a random one of all four edges every time, an
+     * un-human tell — this always exits the edge {@link #afkExitSign()} chose for this login. Vertical
+     * position varies so it isn't the exact same pixel each bout.
+     */
+    private void parkOffScreenDirectional() {
+        int w = Microbot.getClient().getCanvasWidth();
+        int h = Microbot.getClient().getCanvasHeight();
+        int sign = afkExitSign();
+        // Same off-canvas targets as the proven shared moveOffScreen() (-1 / width+1), just forced to one
+        // side instead of a random edge.
+        int x = sign < 0 ? -1 : w + 1;
+        int y = Rs2Random.between(0, Math.max(1, h + 1));
+        log.debug("[MiningSession] AFK park off-screen: side={} target=({},{}) canvas={}x{}",
+                sign < 0 ? "LEFT" : "RIGHT", x, y, w, h);
+        Microbot.naturalMouse.moveTo(x, y);
+    }
+
+    /**
+     * Random point inside {@code shape} (clickbox), biased to the interior via a ~20% inset so it is
+     * neither the exact centre nor an edge pixel. Falls back to the bounds centre if a contained point
+     * isn't found in a few tries or the box is too small to inset. Pure geometry — safe on any thread.
+     */
+    private static Point randomPointInShape(Shape shape, Rectangle b) {
+        int insetX = Math.max(1, b.width / 5);
+        int insetY = Math.max(1, b.height / 5);
+        int minX = b.x + insetX, maxX = b.x + b.width - insetX;
+        int minY = b.y + insetY, maxY = b.y + b.height - insetY;
+        if (maxX > minX && maxY > minY) {
+            for (int i = 0; i < 6; i++) {
+                int x = Rs2Random.between(minX, maxX);
+                int y = Rs2Random.between(minY, maxY);
+                if (shape.contains(x, y)) {
+                    return new Point(x, y);
+                }
+            }
+        }
+        return new Point((int) b.getCenterX(), (int) b.getCenterY());
+    }
+
+    /**
+     * Human-like mouse behaviour while actively mining a vein. Off-screen AFK is the dominant
+     * behaviour — most people watch an AFK skill on a second monitor or look away, cursor parked off
+     * the game canvas. Behaviour is selected by the {@link MouseActivity} config (human-like only):
+     * <ul>
+     *   <li><b>AFK</b> (default): do the click, then park off-screen every bout — minimal on-screen time.
+     *       MLM is an AFK skill, so this is what a real player does: click, look away, click again.</li>
+     *   <li><b>BALANCED</b>: off-screen dominates ({@link SessionPersonality#offScreenParkChance}), with an
+     *       occasional early pre-hover or a bout left on-screen, and a late hover of the next vein as this
+     *       one nears depletion ({@link #hoverEligibleAfterMs}).</li>
+     *   <li><b>ACTIVE</b>: rarely parks; stays on the canvas and lines up the next vein.</li>
+     * </ul>
+     * Fast mode never touches the mouse.
+     */
+    private void handleMiningMouseBehaviour(MLMMiningSpot spot) {
+        if (!isHumanLikeEnabled()) {
+            return;
+        }
+        // Only act once the mining animation/interaction is actually underway.
+        if (!(Rs2Player.isInteracting() || Rs2Player.isAnimating(1200))) {
+            return;
+        }
+
+        MouseActivity mode = config != null ? config.mouseActivity() : MouseActivity.AFK;
+
+        // AFK: the click already happened (we're mining) — now get the cursor off-screen and keep it there.
+        if (mode == MouseActivity.AFK) {
+            if (!afkMouseOffscreen) {
+                parkOffScreenDirectional();
+                afkMouseOffscreen = true;
+                hoverDoneThisBout = true;
+            }
+            return;
+        }
+
+        // Decision 1 — early, once per vein. Off-screen dominates (personality-biased); ACTIVE halves it so
+        // the cursor mostly stays on the canvas.
+        if (!boutMouseDecided) {
+            boutMouseDecided = true;
+            int roll = Rs2Random.between(0, 100);
+            int offScreenChance = mode == MouseActivity.ACTIVE
+                    ? Math.min(30, personality.offScreenParkChance() / 2)
+                    : personality.offScreenParkChance();
+            if (roll < offScreenChance) {              // park off-screen (AFK on another monitor / looking away)
+                parkOffScreenDirectional();
+                afkMouseOffscreen = true;
+                hoverDoneThisBout = true; // parked off-screen; no hover this bout
+                return;
+            }
+            if (roll < offScreenChance + personality.earlyHoverChance()) { // occasional early pre-hover
+                if (hoverNextVein(spot)) {
+                    hoverDoneThisBout = true;
+                }
+                return;
+            }
+            // else: leave the mouse where it is, on-screen.
+        }
+
+        // Decision 2 — late, once per vein: line up the next vein as this one nears depletion.
+        if (!hoverDoneThisBout && !afkMouseOffscreen && subElapsed() >= hoverEligibleAfterMs) {
+            hoverDoneThisBout = true; // one attempt; don't re-roll every tick
+            if (personality.roll(personality.lateHoverChance())) {
+                hoverNextVein(spot); // if it fails (next vein off-screen/absent) we simply leave the mouse put
+            }
+        }
+    }
+
+    /**
+     * Move the virtual mouse over the next candidate vein's clickbox (no click), as a human
+     * lining up their next rock would. Returns true if the mouse was moved.
+     */
+    private boolean hoverNextVein(MLMMiningSpot spot) {
+        WorldPoint player = Rs2Player.getWorldLocation();
+        if (player == null) {
+            return false;
+        }
+        Rs2TileObjectModel next = null;
+        for (RankedVein r : rankVeinsByScore(spot, player, queryVeinsInSpot(spot))) {
+            WorldPoint vp = r.vein.getWorldLocation();
+            if (targetVein != null && vp.equals(targetVein)) {
+                continue; // skip the vein we're currently mining
+            }
+            next = r.vein;
+            break;
+        }
+        if (next == null) {
+            return false;
+        }
+        final Rs2TileObjectModel fnext = next;
+        Point pt = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            Shape cb = fnext.getClickbox();
+            if (cb != null) {
+                Rectangle b = cb.getBounds();
+                if (b.width > 0 && b.height > 0) {
+                    // Random interior point, NOT the exact centre — repeatedly hovering the dead-centre
+                    // pixel of a vein is an obvious detection tell.
+                    return randomPointInShape(cb, b);
+                }
+            }
+            return fnext.getCanvasLocation();
+        }).orElse(null);
+        if (pt == null || pt.getX() < 0 || pt.getY() < 0) {
+            return false;
+        }
+        Microbot.naturalMouse.moveTo(pt.getX(), pt.getY());
+        return true;
+    }
+
+    /**
+     * Ambient, <em>correlated</em> attention behaviour while mining: an occasional inventory-glance — a
+     * "how full am I?" look a present player makes between clicks. It fires only while the cursor is on the
+     * canvas ({@code !afkMouseOffscreen}): a player who has parked the mouse off-screen (watching a second
+     * monitor) is not glancing at their inventory, so an independent coin-flip there would be the un-human
+     * tell this deliberately avoids. Throttled to one glance per {@link #AMBIENT_ATTENTION_COOLDOWN_MS}.
+     * Fast mode never touches the mouse.
+     *
+     * <p>ponytail: no comfort-camera. A real player sets zoom/pitch/yaw once so they can see everything,
+     * then never touches it — a periodic camera nudge is the opposite of human here, so it was removed.
+     */
+    private void handleAmbientAttention() {
+        if (!isHumanLikeEnabled() || afkMouseOffscreen) {
+            return; // fast mode, or AFK off-screen — no ambient attention (the correlation)
+        }
+        if (!(Rs2Player.isInteracting() || Rs2Player.isAnimating(1200))) {
+            return; // only glance while actually mining
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastAmbientAttentionMs < AMBIENT_ATTENTION_COOLDOWN_MS) {
+            return;
+        }
+        if (personality.roll(personality.inventoryGlanceChance()) && glanceAtInventory()) {
+            lastAmbientAttentionMs = now;
+            log.debug("[MiningSession] Ambient attention: inventory-glance");
+        }
+    }
+
+    /**
+     * Move the virtual mouse over a random interior point of the live inventory widget (no click) — a
+     * "how full am I?" glance. Reads the inventory bounds on the client thread; no click, so it never
+     * disturbs mining. Returns true if the mouse was moved.
+     */
+    private boolean glanceAtInventory() {
+        Point pt = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            Widget inv = Microbot.getClient().getWidget(InterfaceID.Inventory.ITEMS);
+            if (inv == null || inv.isHidden()) {
+                return null;
+            }
+            Rectangle b = inv.getBounds();
+            if (b == null || b.width <= 0 || b.height <= 0) {
+                return null;
+            }
+            return randomPointInShape(b, b);
+        }).orElse(null);
+        if (pt == null || pt.getX() < 0 || pt.getY() < 0) {
+            return false;
+        }
+        Microbot.naturalMouse.moveTo(pt.getX(), pt.getY());
+        return true;
+    }
+
+    /** abandon current vein target, mark it as failed, and return to SELECTED */
+    private void abandonVein(MLMMiningSpot spot) {
+        if (targetVein != null) {
+            markFailed(targetVein, spot);
+        }
+        targetVein = null;
+        failedClicks = 0;
+        transitionSub(MiningSubState.SELECTED);
     }
 
     @Override
@@ -282,7 +590,9 @@ public class MiningSession extends Session {
             case TRANSITIONING_FLOOR:
                 // While climbing (or recently started anim), don't re-attempt. Uses event-driven lastAnimationTime.
                 // Combined with scheduleNext after click, covers gaps where raw isAnimating() might be false.
-                if (Rs2Player.isMoving() || Rs2Player.isAnimating(5000)) {
+                // Guard is 1200ms (~2 ticks): the old 5000ms held the state machine here for a full 5s after
+                // the climb finished, which is what made ladder descents "hang" regardless of the human toggle.
+                if (Rs2Player.isMoving() || Rs2Player.isAnimating(1200)) {
                     scheduleNextAdaptive(180L, 600L);
                     break;
                 }
@@ -410,9 +720,17 @@ public class MiningSession extends Session {
                     }
                 }
                 if (isStalled(10_000L)) {
-                    log.warn("[MiningSession] Vein selection stalled - failing");
-                    transitionSub(MiningSubState.FAILED);
-                    transition(State.FAILED);
+                    WorldPoint checkHere = Rs2Player.getWorldLocation();
+                    boolean waitingInSpot = usesUpperStandMiningRules(spot) && checkHere != null && spot.contains(checkHere);
+                    if (waitingInSpot) {
+                        log.debug("[MiningSession] Waiting for veins to spawn in upper area - clearing blacklists and resetting stall");
+                        recentFailures.clear();
+                        subStateEnteredMs = System.currentTimeMillis();
+                    } else {
+                        log.warn("[MiningSession] Vein selection stalled - failing");
+                        transitionSub(MiningSubState.FAILED);
+                        transition(State.FAILED);
+                    }
                 }
                 break;
 
@@ -489,28 +807,19 @@ public class MiningSession extends Session {
                 Rs2TileObjectModel vein = findVeinAt(targetVein);
                 if (vein == null) {
                     log.debug("[MiningSession] Vein at {} lost before click - clearing and reselecting", targetVein);
-                    markFailed(targetVein, spot);
-                    targetVein = null;
-                    failedClicks = 0;
-                    transitionSub(MiningSubState.SELECTED);
+                    abandonVein(spot);
                     break;
                 }
 
                 WorldPoint playerLocClick = Rs2Player.getWorldLocation();
                 if (!isVeinPresent(targetVein)) {
                     log.debug("[MiningSession] Vein at {} depleted before click - reselecting", targetVein);
-                    markFailed(targetVein, spot);
-                    targetVein = null;
-                    failedClicks = 0;
-                    transitionSub(MiningSubState.SELECTED);
+                    abandonVein(spot);
                     break;
                 }
                 if (isVeinBarred(spot, playerLocClick, targetVein)) {
                     log.debug("[MiningSession] Vein at {} barred (rockfall tile/path) - reselecting", targetVein);
-                    markFailed(targetVein, spot);
-                    targetVein = null;
-                    failedClicks = 0;
-                    transitionSub(MiningSubState.SELECTED);
+                    abandonVein(spot);
                     break;
                 }
                 int distToVein = playerLocClick != null ? playerLocClick.distanceTo(targetVein) : Integer.MAX_VALUE;
@@ -518,10 +827,7 @@ public class MiningSession extends Session {
                     if (usesUpperStandMiningRules(spot)) {
                         log.debug("[MiningSession] Upper chamber vein at {} too far to click (dist={}) — reselecting",
                                 targetVein, distToVein);
-                        markFailed(targetVein, spot);
-                        targetVein = null;
-                        failedClicks = 0;
-                        transitionSub(MiningSubState.SELECTED);
+                        abandonVein(spot);
                         break;
                     }
                     if (!Rs2Camera.isTileOnScreen(vein.getLocalLocation())) {
@@ -551,6 +857,11 @@ public class MiningSession extends Session {
                     break;
                 }
 
+                if (isHumanLikeEnabled() && personality.roll(personality.misclickChance())) {
+                    log.debug("[MiningSession] Human-like: misclicked tile next to vein, re-aiming");
+                    scheduleNextAdaptive(500L, 1200L);
+                    break;
+                }
                 if (attemptMineClick(vein, now, "adjacent")) {
                     break;
                 } else {
@@ -559,10 +870,7 @@ public class MiningSession extends Session {
                     log.debug("[MiningSession] Click failed ({}/{})", failedClicks, maxClickFails);
                     if (failedClicks > maxClickFails) {
                         log.warn("[MiningSession] Too many failed clicks on vein at {} - picking a new one", targetVein);
-                        markFailed(targetVein, spot);
-                        targetVein = null;
-                        failedClicks = 0;
-                        transitionSub(MiningSubState.SELECTED);
+                        abandonVein(spot);
                     } else {
                         scheduleNextAdaptive(250L, 800L);
                     }
@@ -629,9 +937,9 @@ public class MiningSession extends Session {
                         break;
                     }
                 }
-                if (subElapsed() > tickDelayMs(CONFIRMED_FAIL_MS_FAST, CONFIRMED_FAIL_MS_HUMAN)) {
+                if (subElapsed() > CONFIRMED_FAIL_MS) {
                     log.debug("[MiningSession] No mining started within {}ms - marking vein failed and reselecting",
-                            tickDelayMs(CONFIRMED_FAIL_MS_FAST, CONFIRMED_FAIL_MS_HUMAN));
+                            CONFIRMED_FAIL_MS);
                     markFailed(targetVein, spot);
                     transitionSub(MiningSubState.DEPLETED);
                     break;
@@ -642,13 +950,23 @@ public class MiningSession extends Session {
             // -----------------------------------------------------------------
             case MINING: {
                 if (Rs2Inventory.isFull()) {
+                    ensureMouseInGame();
                     transitionSub(MiningSubState.INV_FULL);
                     break;
                 }
                 if (maxSack > 0 && sackCount >= maxSack) {
+                    ensureMouseInGame();
                     transitionSub(MiningSubState.SACK_FULL);
                     break;
                 }
+
+                // Human-like: once per mining bout, pick a mouse behaviour (AFK off-screen /
+                // pre-hover the next vein / leave it put) instead of always going off-screen.
+                handleMiningMouseBehaviour(spot);
+
+                // Human-like: occasional idle fidget (inventory-glance / camera nudge) while mining.
+                // Called after the mouse decision so a fresh off-screen park this tick suppresses it.
+                handleAmbientAttention();
 
                 // If player is moving, they haven't started mining yet - don't count
                 // this time toward stuck detection. Transition back to ARRIVING.
@@ -707,6 +1025,7 @@ public class MiningSession extends Session {
                     markFailed(targetVein, spot);
                 }
                 targetVein = null;
+                ensureMouseInGame();
                 scheduleNextAdaptive(500L, 1000L);
                 transitionSub(MiningSubState.SELECTED);
                 break;
@@ -714,6 +1033,7 @@ public class MiningSession extends Session {
             // -----------------------------------------------------------------
             case INV_FULL:
             case SACK_FULL:
+                ensureMouseInGame();
                 transition(State.COMPLETE);
                 break;
 
@@ -742,7 +1062,17 @@ public class MiningSession extends Session {
             case CLICKED:             updateStatus("Clicking Vein");             break;
             case ARRIVING:            updateStatus("Walking to Vein");           break;
             case CONFIRMED:           updateStatus("Waiting for Mining Start");  break;
-            case MINING:              updateStatus("Mining Vein");               break;
+            case MINING:              boutMouseDecided = false;
+                                      hoverDoneThisBout = false;
+                                      // The click that got us here pulled the cursor back on-screen, so a new
+                                      // bout starts on-screen. Clearing this lets AFK mode re-park each bout
+                                      // (and keeps the late-hover guard honest for BALANCED/ACTIVE).
+                                      afkMouseOffscreen = false;
+                                      // MLM veins are mined continuously for tens of seconds, so "nearly
+                                      // depleted" is late in the bout — not 5s in. Often the vein collapses
+                                      // before this elapses, which is fine: hovering the next vein is optional.
+                                      hoverEligibleAfterMs = Rs2Random.between(22_000, 45_000);
+                                      updateStatus("Mining Vein");               break;
             case DEPLETED:            updateStatus("Vein Depleted");             break;
             case INV_FULL:            updateStatus("Inventory Full");            break;
             case SACK_FULL:           updateStatus("Sack Full");                 break;
@@ -796,12 +1126,6 @@ public class MiningSession extends Session {
             t = t.getCause();
         }
         return false;
-    }
-
-    private boolean isVeinCandidate(Rs2TileObjectModel vein, MLMMiningSpot spot, WorldPoint playerLoc) {
-        if (vein == null || spot == null || playerLoc == null) return false;
-        if (scoreVein(vein, spot, playerLoc) >= SCORE_OUT_OF_RANGE) return false;
-        return isReadyToClick(vein.getWorldLocation(), playerLoc, spot);
     }
 
     private boolean isReadyToClick(WorldPoint veinLoc, WorldPoint playerLoc, MLMMiningSpot spot) {
@@ -1034,6 +1358,24 @@ public class MiningSession extends Session {
             } else {
                 dist = minStandDist;
             }
+
+            // Critical player-local bias: when the player is already standing right next to (or very close to)
+            // a valid vein, *strongly* prefer mining the local one instead of "optimizing" for a perfect
+            // stand tile that happens to be around the corner or requires moving.
+            // This fixes the case where the bot ignores an adjacent vein and selects one with better
+            // stand-distance but worse current player distance.
+            int pDist = playerLoc.distanceTo(vp);
+            if (pDist <= VEIN_CLICK_MAX_DISTANCE && !isVeinBarred(spot, playerLoc, vp)) {
+                if (pDist <= 2) {
+                    // Anything the player can click *right now* (adjacent or 1-2 tiles) gets a massive
+                    // priority boost (negative score) so it wins the ranking over any pure stand-0 that
+                    // is farther from the current position.
+                    dist = pDist - 20;
+                } else {
+                    // For still-direct but slightly farther, at least use the better of stand or player dist.
+                    dist = Math.min(dist, pDist);
+                }
+            }
         } else {
             dist = playerLoc.distanceTo(vp);
         }
@@ -1086,7 +1428,7 @@ public class MiningSession extends Session {
             return false;
         }
         return tileCache.query()
-                .where(o -> isOreVein(o.getId()) && isActiveVein(o))
+                .where(this::isActiveVein)
                 .toList()
                 .stream()
                 .anyMatch(o -> {
@@ -1157,27 +1499,8 @@ public class MiningSession extends Session {
                 ranked.add(new RankedVein(vein, effective));
             }
         }
-        sortRankedVeinsByScore(ranked);
+        ranked.sort(Comparator.comparingInt(r -> r.effectiveScore));
         return ranked;
-    }
-
-    private static void sortRankedVeinsByScore(List<RankedVein> ranked) {
-        for (int i = 0; i < ranked.size(); i++) {
-            int bestIdx = i;
-            int bestScore = ranked.get(i).effectiveScore;
-            for (int j = i + 1; j < ranked.size(); j++) {
-                int score = ranked.get(j).effectiveScore;
-                if (score < bestScore) {
-                    bestScore = score;
-                    bestIdx = j;
-                }
-            }
-            if (bestIdx != i) {
-                RankedVein swap = ranked.get(i);
-                ranked.set(i, ranked.get(bestIdx));
-                ranked.set(bestIdx, swap);
-            }
-        }
     }
 
     /** Top scored vein for walk/reposition paths, or null when none are in range. */
@@ -1189,8 +1512,7 @@ public class MiningSession extends Session {
     private List<Rs2TileObjectModel> queryVeinsInSpot(MLMMiningSpot spot) {
         boolean upperChamber = usesUpperStandMiningRules(spot);
         var query = tileCache.query()
-                .where(o -> isOreVein(o.getId())
-                        && isActiveVein(o)
+                .where(o -> isActiveVein(o)
                         && isVeinInSelectableZone(spot, o.getWorldLocation()));
         if (!upperChamber) {
             query = query.where(o -> Rs2Tile.areSurroundingTilesWalkable(o.getWorldLocation(), 1, 1));
@@ -1215,6 +1537,35 @@ public class MiningSession extends Session {
      * Selects the best ore vein in the mining spot by effective score ({@link #rankVeinsByScore}).
      * Human-like mode may take 2nd/3rd ranked picks; anti-crash may skip a crowded top pick on lower floor.
      */
+    /**
+     * Nearest reachable, non-barred, in-zone active vein within {@link #ADJACENT_DIST} of the player,
+     * or null if none. Recently-failed veins are excluded so we don't re-pick one we just gave up on.
+     * ponytail: intentionally ignores anti-crash here — if we're already standing next to a rock,
+     * mining it is the human move; re-selecting to dodge a crowd would just thrash.
+     */
+    private WorldPoint nearestAdjacentVein(MLMMiningSpot spot, WorldPoint playerLoc,
+                                           List<Rs2TileObjectModel> allVeins) {
+        WorldPoint best = null;
+        int bestDist = Integer.MAX_VALUE;
+        for (Rs2TileObjectModel v : allVeins) {
+            if (!isActiveVein(v)) {
+                continue;
+            }
+            WorldPoint vp = v.getWorldLocation();
+            int d = playerLoc.distanceTo(vp);
+            if (d > ADJACENT_DIST || d >= bestDist) {
+                continue;
+            }
+            if (!isVeinInSelectableZone(spot, vp) || isVeinBarred(spot, playerLoc, vp)
+                    || isRecentlyFailed(vp, spot)) {
+                continue;
+            }
+            bestDist = d;
+            best = vp;
+        }
+        return best;
+    }
+
     private WorldPoint selectVein(MLMMiningSpot spot) {
         WorldPoint playerLoc = Rs2Player.getWorldLocation();
         if (playerLoc == null) {
@@ -1225,6 +1576,16 @@ public class MiningSession extends Session {
         if (allVeins.isEmpty()) {
             log.info("[MiningSession] No active veins found in spot {}", spot);
             return null;
+        }
+
+        // Nearest-vein rule: a human standing next to a rock mines THAT rock (left/right/behind),
+        // not a farther "better-scored" one. If a reachable, non-barred, in-zone active vein is
+        // within ADJACENT_DIST, pick the nearest such vein and skip cluster/2nd-3rd randomization.
+        WorldPoint adjacent = nearestAdjacentVein(spot, playerLoc, allVeins);
+        if (adjacent != null) {
+            log.info("[MiningSession] Adjacent vein at {} (dist={}) — mining nearest, skipping ranking",
+                    adjacent, playerLoc.distanceTo(adjacent));
+            return adjacent;
         }
 
         List<RankedVein> ranked = rankVeinsByScore(spot, playerLoc, allVeins);
@@ -1251,6 +1612,15 @@ public class MiningSession extends Session {
                 return null;
             }
             pickPool = clickReady;
+
+            // Once click-ready veins are filtered, prefer the one closest to the player's current
+            // position rather than the one with the best stand-tile score. This ensures veins
+            // behind or beside the player are selected over "perfect" stand-tile veins further away.
+            Collections.sort(clickReady, (a, b) -> Integer.compare(
+                playerLoc.distanceTo(a.vein.getWorldLocation()),
+                playerLoc.distanceTo(b.vein.getWorldLocation())
+            ));
+            pickPool = clickReady;
         }
 
         final WorldPoint finalPlayer = playerLoc;
@@ -1259,11 +1629,11 @@ public class MiningSession extends Session {
         if (isHumanLikeEnabled() && num > 1) {
             java.util.concurrent.ThreadLocalRandom rng = java.util.concurrent.ThreadLocalRandom.current();
             double r = rng.nextDouble();
-            if (r < 0.15 && num >= 3) {
+            if (r < 0.25 && num >= 3) {
                 chosen = pickPool.get(2).vein;
-            } else if (r < 0.35) {
+            } else if (r < 0.50) {
                 chosen = pickPool.get(1).vein;
-            } else if (r < 0.42) {
+            } else if (r < 0.57) {
                 int d0 = finalPlayer.distanceTo(chosen.getWorldLocation());
                 int d1 = finalPlayer.distanceTo(pickPool.get(1).vein.getWorldLocation());
                 if (d1 <= d0 + 2) {

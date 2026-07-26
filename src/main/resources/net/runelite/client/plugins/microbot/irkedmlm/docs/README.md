@@ -1,101 +1,45 @@
-# ⛏️ Motherload Mine
+# Motherlode Mine (irkedMATT)
 
-An intelligent automation plugin for the Motherlode Mine minigame in Old School RuneScape. This bot efficiently mines paydirt, manages inventory, handles banking, and maximizes your mining experience and profit.
+Automates the Motherlode Mine: mines pay-dirt, deposits it at the hopper, empties the sack at
+the deposit box, repairs the water-wheel struts, and tracks ores/nuggets/XP in an overlay.
 
-## 📋 Overview
+## Features
 
-The Motherload Mine Bot automates the complete Motherlode Mine workflow:
+- **Mining spots**: West Lower, West Mid, South East, South West, and the two upper chambers
+  (West Upper, East Upper). Upper chambers use hand-defined tile meshes for the wall veins.
+- **Sack tracking**: projection-aware sack count that stays accurate through varbit lag right
+  after a deposit, so it empties at the right time instead of a cycle early or late.
+- **Water-wheel repair**: fetches a hammer from the supply crate when needed and repairs broken
+  struts. Defers to another player already at the wheel, but reclaims the job if the struts stay
+  broken (an idle bystander won't leave the bot stuck).
+- **Pickaxe special attack**: uses dragon / infernal / crystal pickaxe specials while mining.
+- **Gem bag** support and optional **gem dropping**.
+- **Upstairs hopper** support once unlocked (still climbs down to empty the sack and repair).
+- **Anti-crash**: on the lower floor, avoids veins another player is standing on.
+- **Humanization**: optional layer of randomized pauses, hesitation, spot jitter, and imperfection.
 
-- **Smart Mining**: Automatically finds and mines paydirt veins
-- **Intelligent Navigation**: Moves between upper and lower levels efficiently
-- **Inventory Management**: Handles full inventory scenarios and banking
-- **Equipment Detection**: Automatically detects and uses your pickaxe
-- **Anti-ban Features**: Built-in randomization and human-like behavior
+## Setup
 
-## ✨ Features
+1. Have a pickaxe (equipped or in inventory) you meet the Mining level for.
+2. Open the config and pick your **Mining Area** and **Sack Size** under *Core Settings*.
+3. Lock any inventory slots you want to keep if you enable **Use Deposit All**.
+4. Start the plugin.
 
-### 🎯 Core Functionality
-- **Automated Paydirt Mining**: Finds optimal mining spots and extracts paydirt
-- **Smart Sack Management**: Automatically deposits paydirt into the hopper
-- **Intelligent Banking**: Banks nuggets and manages inventory efficiently
-- **Level Progression**: Supports both upper and lower level mining areas
-- **Dynamic Pathfinding**: Navigates complex mine layouts automatically
+## Config highlights
 
-### 🛡️ Safety & Anti-Detection
-- **Advanced Anti-ban**: Sophisticated randomization patterns
-- **Human-like Behavior**: Realistic mouse movements and timing
-- **Activity Variation**: Random breaks and behavior changes
-- **Error Recovery**: Handles unexpected situations gracefully
+| Setting | What it does |
+|---------|--------------|
+| Mining Area | Primary mining location. |
+| Sack Size | Standard (108) or Upgraded (189); auto-detects increases mid-run. |
+| Use Upstairs Hopper | Deposit at the upper hopper once unlocked. |
+| Repair Struts | Auto-repair broken water-wheel struts. |
+| Use Gem Bag | Empty a full gem bag at the deposit box. |
+| Drop Gems | Drop uncut gems at the vein to save space. |
+| Human-like behavior | Master toggle for the humanization layer. |
+| Debug Mode | Verbose console logging of state transitions and routing decisions. |
 
-## 🚀 Getting Started
+## Notes
 
-### Prerequisites
-- **Mining Level**: 30+ (required for Motherlode Mine access)
-- **Equipment**: Any pickaxe (higher tier recommended for efficiency)
-- **Inventory**: Empty inventory slots for paydirt collection
-- **Location**: Start at the Motherlode Mine (Falador)
-
-### Quick Setup
-1. **Navigate to Motherlode Mine**: Go to the mining site in Falador
-2. **Equip Pickaxe**: Ensure you have a pickaxe equipped or in inventory
-3. **Configure Settings**: Adjust settings through the plugin configuration
-5. **Enable Plugin**: Toggle the Motherload Mine plugin in the plugin panel
-5. **Start Mining**: The bot will begin automatically mining paydirt
-
-## ⚙️ Configuration Options
-
-### Mining Settings
-- **Mining Area**: Choose between upper and lower level areas
-- **Vein Selection**: Prioritize specific mining spots
-- **Efficiency Mode**: Optimize for experience vs. profit
-
-### Banking & Inventory
-- **Banking Strategy**: Configure when and how to bank items
-- **Inventory Management**: Set item priorities and handling
-- **Nugget Handling**: Automatic nugget collection and banking
-
-### Performance Tuning
-- **Activity Intensity**: Adjust bot aggressiveness and timing
-- **Randomization Level**: Control anti-detection behavior strength
-- **Break Patterns**: Configure automatic break scheduling
-
-## 🎮 How It Works
-
-### Mining Cycle
-1. **Scout Mining Spots**: Scans for available paydirt veins
-2. **Select Optimal Vein**: Chooses best mining location based on proximity and efficiency
-3. **Mine**: Extracts paydirt until vein is depleted or inventory full
-4. **Deposit**: Automatically deposits paydirt into the hopper
-5. **Collect**: Retrieves nuggets from the sack when available
-6. **Repeat**: Continues the cycle for optimal efficiency
-
-### Smart Navigation
-- **Multi-level Support**: Seamlessly moves between upper and lower mining areas
-- **Obstacle Handling**: Navigates around players and environmental obstacles
-- **Efficient Pathing**: Uses shortest routes between mining spots and facilities
-
-### Inventory Management
-- **Dynamic Prioritization**: Adjusts inventory management based on current needs
-- **Full Inventory Handling**: Automatically deposits items when inventory is full
-- **Item Recognition**: Identifies and manages different item types appropriately
-
-## 🔧 Troubleshooting
-
-### Common Issues
-
-- Ensure you're at the Motherlode Mine location
-- Check that you have a pickaxe equipped or in inventory
-- Verify the plugin is enabled and configured correctly
-
-## 🤝 Contributing
-
-We welcome contributions to improve the Motherload Mine Plugin:
-
-- **Bug Reports**: Help us identify and fix issues
-- **Feature Requests**: Suggest new functionality
-- **Code Contributions**: Submit improvements and optimizations
-- **Documentation**: Help improve setup guides and troubleshooting
-
----
-
-*Happy Mining! ⛏️*
+- Nugget upgrades (bigger sack, upstairs access) are left to the player — the bot does not spend
+  nuggets.
+- The overlay's nugget total is the live inventory + bank count.

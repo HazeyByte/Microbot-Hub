@@ -10,6 +10,7 @@ import net.runelite.client.plugins.microbot.irkedmlm.enums.MLMMiningSpot;
 import net.runelite.client.plugins.microbot.api.tileobject.Rs2TileObjectCache;
 import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectModel;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
+import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 
@@ -57,6 +58,9 @@ public class HopperSession extends Session {
     @Getter
     private int depositRetryCount = 0;
 
+    /** One-shot: whether we've already taken the occasional "beat before depositing" pause this trip. */
+    private boolean preDepositPaused = false;
+
     /** Active mining area; downstairs spots always use the lower hopper. */
     private MLMMiningSpot depositMiningSpot;
 
@@ -76,6 +80,7 @@ public class HopperSession extends Session {
         hopperSubState       = HopperSubState.IDLE;
         initialPayDirtCount  = 0;
         depositRetryCount    = 0;
+        preDepositPaused     = false;
         depositMiningSpot    = null;
     }
 
@@ -99,6 +104,7 @@ public class HopperSession extends Session {
             return;
         }
         initialPayDirtCount = Rs2Inventory.count(ItemID.PAYDIRT);
+        depositRetryCount = 0;
         log.info("[HopperSession] Beginning session with {} pay-dirt (retry={})",
                 initialPayDirtCount, depositRetryCount);
         transitionSub(HopperSubState.IDLE);
@@ -126,7 +132,9 @@ public class HopperSession extends Session {
             }
 
             case TRANSITIONING_FLOOR: {
-                if (Rs2Player.isMoving() || Rs2Player.isAnimating(5000)) {
+                // 1200ms (~2 ticks) not 5000ms: the old guard stalled the deposit trip for 5s after
+                // every ladder climb, the main cause of the "long wait after clicking the ladder".
+                if (Rs2Player.isMoving() || Rs2Player.isAnimating(1200)) {
                     scheduleNextAdaptive(180L, 600L);
                     break;
                 }
@@ -205,6 +213,14 @@ public class HopperSession extends Session {
                     break;
                 }
 
+                // Human variation: ~30% of the time take a short, once-per-trip beat before depositing
+                // so the deposit cadence isn't uniform. Fast mode never does this.
+                if (isHumanLikeEnabled() && !preDepositPaused && Rs2Random.between(0, 100) < 30) {
+                    preDepositPaused = true;
+                    scheduleNext(Rs2Random.between(350, 1400));
+                    break;
+                }
+
                 Rs2TileObjectModel hopper = findDesiredHopper();
                 if (hopper == null) {
                     retreatFromMissingHopper();
@@ -214,7 +230,8 @@ public class HopperSession extends Session {
                 if (hopper.click("Deposit")) {
                     log.info("[HopperSession] Deposit interaction sent");
                     applyActionCooldown();
-                    scheduleNextAdaptive(280L, CLICK_THROTTLE_MS);
+                    // Wider human gap so repeated deposit clicks (retries) aren't metronomic.
+                    scheduleNextAdaptive(280L, 950L);
                     transitionSub(HopperSubState.VERIFYING);
                 } else {
                     scheduleNextAdaptive(280L, CLICK_THROTTLE_MS);
@@ -260,15 +277,6 @@ public class HopperSession extends Session {
                 break;
             }
 
-            // ----------------------------------------------------------------
-            case COMPLETE:
-                transition(State.COMPLETE);
-                break;
-
-            case FAILED:
-                transition(State.FAILED);
-                break;
-
             default:
                 break;
         }
@@ -311,8 +319,7 @@ public class HopperSession extends Session {
         }
         WorldPoint anchor = expectedHopperPoint();
         return tileCache.query()
-                .withId(IrkedMLMMapConstants.HOPPER_OBJECT_ID)
-                .where(o -> o.getWorldLocation().distanceTo(anchor) <= HOPPER_LOC_TOLERANCE)
+                .where(o -> o.getId() == IrkedMLMMapConstants.HOPPER_OBJECT_ID && o.getWorldLocation().distanceTo(anchor) <= HOPPER_LOC_TOLERANCE)
                 .nearest();
     }
 

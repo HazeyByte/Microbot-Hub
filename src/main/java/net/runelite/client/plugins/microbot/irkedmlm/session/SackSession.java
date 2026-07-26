@@ -52,10 +52,9 @@ public class SackSession extends Session {
             ItemID.GOLD_ORE, ItemID.COAL
     );
 
-    private static final int SACK_ID       = ObjectID.MOTHERLODE_SACK;
-    private static final int SACK_ID_ALT   = 26687;
-    private static final int SACK_ID_ALT2  = 26688;
-    private static final int DEPOSIT_BOX_ID = 25937;
+    private static final int SACK_ID         = ObjectID.MOTHERLODE_SACK;
+    private static final int SACK_ID_GRAPHIC  = ObjectID.MOTHERLODE_SACK_GRAPHIC;
+    private static final int DEPOSIT_BOX_ID   = 25937;
 
     private static final WorldPoint DEPOSIT_BOX_LOC = IrkedMLMMapConstants.DEPOSIT_BOX_LOC;
 
@@ -65,6 +64,7 @@ public class SackSession extends Session {
     private MLMMiningSpot originalMiningSpot    = null;
     private boolean       gemBagEmptiedThisSession = false;
     private int           withdrawRetryCount    = 0;
+    private final int[] pendingOreDepositSnapshot = new int[ORE_IDS.size()];
 
     /** Progress tracking to detect when withdraws are not actually reducing the sack (stale varbit
      *  or wrong action). Used to break the "Sack still has 189/189 ore — looping" forever case
@@ -86,6 +86,7 @@ public class SackSession extends Session {
         originalMiningSpot        = null;
         gemBagEmptiedThisSession  = false;
         withdrawRetryCount        = 0;
+        java.util.Arrays.fill(pendingOreDepositSnapshot, 0);
         lastSeenSackCount         = -1;
         noProgressWithdraws       = 0;
     }
@@ -170,6 +171,16 @@ public class SackSession extends Session {
                 break;
 
             case WITHDRAW:
+                if (isUpperFloor()) {
+                    // Safety: if we somehow entered/continued WITHDRAW while on upper floor
+                    // (e.g. ladder position "in front" made previous dist check think we were close,
+                    // or status transition happened at the ladder), force the floor transition
+                    // instead of spamming clicks on the lower sack object (which produces no progress
+                    // and the empty-option MenuEntry spam).
+                    log.debug("[SackSession] WITHDRAW on upper floor — forcing floor transition before sack clicks");
+                    transitionSub(SackSubState.TRANSITIONING_FLOOR);
+                    break;
+                }
                 if (Rs2Inventory.isFull()) {
                     transitionSub(SackSubState.DEPOSIT);
                     break;
@@ -207,10 +218,10 @@ public class SackSession extends Session {
                 // Reusing the same query instance for two .nearest* calls causes "stream has already been
                 // operated upon or closed". Build independent queries.
                 var sackForClick = tileCache.query()
-                        .where(o -> o.getId() == SACK_ID || o.getId() == SACK_ID_ALT || o.getId() == SACK_ID_ALT2)
+                        .where(o -> o.getId() == SACK_ID || o.getId() == SACK_ID_GRAPHIC)
                         .nearestReachable();
                 var sackForTarget = tileCache.query()
-                        .where(o -> o.getId() == SACK_ID || o.getId() == SACK_ID_ALT || o.getId() == SACK_ID_ALT2)
+                        .where(o -> o.getId() == SACK_ID || o.getId() == SACK_ID_GRAPHIC)
                         .nearest(); // any sack in scene for walk target (full scene is scanned)
 
                 WorldPoint sackLoc = (sackForTarget != null) ? sackForTarget.getWorldLocation() : null;
@@ -347,6 +358,7 @@ public class SackSession extends Session {
 
                 // Deposit ores — respect "Use Deposit All" config
                 if (config.useDepositAll()) {
+                    captureOreDepositSnapshot();
                     Rs2DepositBox.depositAll();
                     scheduleNextAdaptive(350L, CLICK_THROTTLE_MS);
                     transitionSub(SackSubState.CHECK_EMPTY);
@@ -359,6 +371,7 @@ public class SackSession extends Session {
 
                     for (int oreId : depositOrder) {
                         if (Rs2Inventory.contains(oreId)) {
+                            captureOreDepositSnapshot(oreId);
                             Rs2Inventory.interact(oreId, "Deposit-All");
                             applyActionCooldown();
                             scheduleNextAdaptive(180L, 600L);
@@ -369,7 +382,7 @@ public class SackSession extends Session {
                     // they are not sent to the deposit box like ores — they accumulate for
                     // upgrades/ladder and are visible as batch sizes after each withdraw.
                     // The "Nuggets" tracker value in the overlay is populated from chat loot
-                    // announcements for a pure session total, not inv detection on empty.)
+                    // announcements (the documented correct method for session total).)
                     scheduleNextAdaptive(350L, CLICK_THROTTLE_MS);
                     transitionSub(SackSubState.CHECK_EMPTY);
                 }
@@ -399,10 +412,6 @@ public class SackSession extends Session {
                 transition(State.COMPLETE);
                 break;
 
-            case FAILED:
-                transition(State.FAILED);
-                break;
-
             default:
                 break;
         }
@@ -427,6 +436,25 @@ public class SackSession extends Session {
             if (Rs2Inventory.contains(oreId)) return true;
         }
         return false;
+    }
+
+    private void captureOreDepositSnapshot() {
+        for (int i = 0; i < ORE_IDS.size(); i++) {
+            pendingOreDepositSnapshot[i] = Math.max(pendingOreDepositSnapshot[i], Rs2Inventory.count(ORE_IDS.get(i)));
+        }
+    }
+
+    private void captureOreDepositSnapshot(int oreId) {
+        int idx = ORE_IDS.indexOf(oreId);
+        if (idx >= 0) {
+            pendingOreDepositSnapshot[idx] = Math.max(pendingOreDepositSnapshot[idx], Rs2Inventory.count(oreId));
+        }
+    }
+
+    public int[] consumePendingOreDepositSnapshot() {
+        int[] copy = java.util.Arrays.copyOf(pendingOreDepositSnapshot, pendingOreDepositSnapshot.length);
+        java.util.Arrays.fill(pendingOreDepositSnapshot, 0);
+        return copy;
     }
 
     public WorldPoint getReturnPoint() {

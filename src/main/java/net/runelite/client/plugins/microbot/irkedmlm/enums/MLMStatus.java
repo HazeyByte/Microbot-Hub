@@ -7,5 +7,10 @@ public enum MLMStatus {
     EMPTY_SACK,
     FIXING_WATERWHEEL,
     DROP_GEMS,
-    RECOVERY
+    RECOVERY,
+    REPAIRING,
+    BANKING,
+    INVENTORY_FULL,
+    SACK_FULL,
+    ERROR
 }

@@ -7,7 +7,6 @@ import lombok.Getter;
 import net.runelite.api.EquipmentInventorySlot;
 import net.runelite.api.Skill;
 import net.runelite.api.gameval.ItemID;
-import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
 import net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2ItemModel;
@@ -26,7 +25,9 @@ public enum Pickaxe
 	ADAMANT_PICKAXE("adamant pickaxe", ItemID.ADAMANT_PICKAXE, 31, 30),
 	RUNE_PICKAXE("rune pickaxe", ItemID.RUNE_PICKAXE, 41, 40),
 	DRAGON_PICKAXE("dragon pickaxe", ItemID.DRAGON_PICKAXE, 61, 60),
-	CRYSTAL_PICKAXE("crystal pickaxe", ItemID.CRYSTAL_PICKAXE, 71, 70);
+	CRYSTAL_PICKAXE("crystal pickaxe", ItemID.CRYSTAL_PICKAXE, 71, 70),
+	INFERNAL_PICKAXE("infernal pickaxe", ItemID.INFERNAL_PICKAXE, 61, 60),
+	INFERNAL_PICKAXE_EMPTY("infernal pickaxe", ItemID.INFERNAL_PICKAXE_EMPTY, 61, 60);
 
 	private final String itemName;
 	private final int itemID;
@@ -37,28 +38,14 @@ public enum Pickaxe
         return getBestPickaxe() != null;
     }
 
-    /**
-     * Gets the best pickaxe available for mining (equipped or in inventory)
-     */
     public static Rs2ItemModel getBestPickaxe() {
         Rs2ItemModel equipped = Rs2Equipment.get(EquipmentInventorySlot.WEAPON);
         if (equipped != null && isPickaxe(equipped.getId()) && canUse(equipped.getId())) {
             return equipped;
         }
-
-        // Then check inventory
         return Rs2Inventory.items()
             .filter(item -> isPickaxe(item.getId()) && canUse(item.getId()))
-            .max(Comparator.comparingInt(item -> getMiningLevel(item.getId())))
-            .orElse(null);
-    }
-
-    /**
-     * Gets the best pickaxe from bank (for withdrawing)
-     */
-    public static Rs2ItemModel getBestPickaxeFromBank() {
-        return Rs2Bank.getAll(item -> isPickaxe(item.getId()) && canUse(item.getId()))
-            .max(Comparator.comparingInt(item -> getMiningLevel(item.getId())))
+            .max(Comparator.comparingInt((Rs2ItemModel item) -> getMiningLevel(item.getId())))
             .orElse(null);
     }
 
@@ -81,13 +68,5 @@ public enum Pickaxe
             .mapToInt(Pickaxe::getMiningLevel)
             .findFirst()
             .orElse(0);
-    }
-
-    public static boolean hasAttackLevelRequirement(int itemId) {
-        return Arrays.stream(values())
-            .filter(p -> p.itemID == itemId)
-            .findFirst()
-            .map(p -> Rs2Player.getSkillRequirement(Skill.ATTACK, p.attackLevel))
-            .orElse(false);
     }
 }

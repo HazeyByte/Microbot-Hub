@@ -48,7 +48,6 @@ public enum MLMMiningSpot {
     ), null),
 
     SOUTH_WEST(Arrays.asList(
-            new WorldPoint(3740, 5648, 0),
             new WorldPoint(3740, 5648, 0)
     ), false, Arrays.asList(
             new WorldArea(3732, 5645, 15, 10, 0)
@@ -136,17 +135,5 @@ public enum MLMMiningSpot {
             }
         }
         return false;
-    }
-
-    /** @deprecated Use {@link #contains(WorldPoint)}. */
-    @Deprecated
-    public boolean containsInArea(WorldPoint point) {
-        return contains(point);
-    }
-
-    /** @deprecated Use {@link #contains(WorldPoint)}. */
-    @Deprecated
-    public boolean containsInWorldArea(WorldPoint point) {
-        return contains(point);
     }
 }
