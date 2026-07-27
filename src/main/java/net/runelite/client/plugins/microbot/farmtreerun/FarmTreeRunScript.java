@@ -545,14 +545,18 @@ public class FarmTreeRunScript extends Script {
             if (hardTreeSaplingsCount > 0)
                 items.add(new FarmingItem(selectedHardTree.getSaplingId(), hardTreeSaplingsCount));
 
+            // Protection is an explicit user choice. Payment is only requested when the
+            // matching "Protect" toggle is on, and a missing payment item never aborts the
+            // run — we log it and plant unprotected. (This is what caused the phantom
+            // "Out of coconuts": Magic/Dragonfruit pay in coconuts and protection defaulted on.)
             if (config.enableTrees() && config.protectTrees() && regularTreeSaplingsCount > 0)
-                items.add(new FarmingItem(selectedTree.getPaymentId(), selectedTree.getPaymentAmount() * regularTreeSaplingsCount, true));
+                addProtectionPayment(selectedTree.getPaymentId(), selectedTree.getPaymentAmount() * regularTreeSaplingsCount, "regular trees");
 
-            if (config.enableHardTrees() && config.protectHardTrees())
-                items.add(new FarmingItem(selectedHardTree.getPaymentId(), selectedHardTree.getPaymentAmount() * hardTreeSaplingsCount, true));
+            if (config.enableHardTrees() && config.protectHardTrees() && hardTreeSaplingsCount > 0)
+                addProtectionPayment(selectedHardTree.getPaymentId(), selectedHardTree.getPaymentAmount() * hardTreeSaplingsCount, "hardwood trees");
 
-            if (config.enableFruitTrees() && config.protectFruitTrees())
-                items.add(new FarmingItem(selectedFruitTree.getPaymentId(), selectedFruitTree.getPaymentAmount() * fruitTreeSaplingsCount, true));
+            if (config.enableFruitTrees() && config.protectFruitTrees() && fruitTreeSaplingsCount > 0)
+                addProtectionPayment(selectedFruitTree.getPaymentId(), selectedFruitTree.getPaymentAmount() * fruitTreeSaplingsCount, "fruit trees");
 
             if (config.enableTrees() && config.taverleyTreePatch())
                 items.add(new FarmingItem(ItemID.TAVERLEY_TELEPORT, 1, false, true));
@@ -592,6 +596,19 @@ public class FarmTreeRunScript extends Script {
                     new FarmingItem(a.getItemId(), a.getQuantity() + b.getQuantity(), a.isNoted(), a.isOptional()));
             }
             items = new ArrayList<>(merged.values());
+
+            // Capacity guard: a single flat inventory cannot hold supplies for many patch
+            // categories at once. Explain the overflow instead of silently withdrawing until
+            // it breaks. (The v2 "irkedFarmer" rewrite replaces this with per-task planning.)
+            int plannedSlots = estimatePlannedSlots(items);
+            if (plannedSlots > 28) {
+                Microbot.showMessage("This run needs ~" + plannedSlots + " inventory slots (max 28). "
+                        + "Enable fewer patch categories per run — do trees, then fruit trees, then hardwood "
+                        + "as separate runs (disable Banking between them). Shutting down.");
+                Microbot.log("Inventory plan requires ~" + plannedSlots + " slots (>28). Reduce enabled categories/patches.");
+                shutdown();
+                return;
+            }
 
             // Deposit only what we don't need: keep desired ids and their noted variants
             Set<Integer> keepIds = new HashSet<>();
@@ -674,6 +691,42 @@ public class FarmTreeRunScript extends Script {
         }
     }
 
+    /**
+     * Adds a protection payment as noted + optional so a missing payment never aborts the run.
+     * Logs clearly when the bank can't cover it, so the user understands the patch will be
+     * planted unprotected rather than seeing a cryptic "out of coconuts" shutdown.
+     */
+    private void addProtectionPayment(int paymentId, int amount, String label) {
+        if (amount <= 0) return;
+        items.add(new FarmingItem(paymentId, amount, true, true)); // noted + optional
+        if (!Rs2Bank.hasItem(new int[]{paymentId}, amount)) {
+            String name = Microbot.getClientThread()
+                    .runOnClientThreadOptional(() -> Microbot.getItemManager().getItemComposition(paymentId).getName())
+                    .orElse("payment item");
+            Microbot.log("Protection for " + label + " needs " + amount + "x " + name
+                    + " but the bank doesn't have enough. " + label + " will be planted UNPROTECTED.");
+        }
+    }
+
+    /**
+     * Estimates how many inventory slots the planned withdrawal will occupy. Noted and stackable
+     * items take one slot; everything else takes one slot per unit (e.g. tree saplings).
+     */
+    private int estimatePlannedSlots(List<FarmingItem> plan) {
+        int slots = 0;
+        for (FarmingItem it : plan) {
+            if (it.isNoted()) {
+                slots += 1;
+                continue;
+            }
+            boolean stackable = Boolean.TRUE.equals(Microbot.getClientThread()
+                    .runOnClientThreadOptional(() -> Microbot.getItemManager().getItemComposition(it.getItemId()).isStackable())
+                    .orElse(false));
+            slots += stackable ? 1 : it.getQuantity();
+        }
+        return slots;
+    }
+
     private boolean handlePatch(FarmTreeRunConfig config, Patch patch) {
         String[] possibleActions = {"Check", "Chop", "Pick", "Rake", "Clear", "Inspect"};
         GameObject treePatch = null;
@@ -711,7 +764,6 @@ public class FarmTreeRunScript extends Script {
 
         boolean done = false;
         boolean treePlanted = false;
-        boolean protectionHandled = false;
 
         // Handle the patch based on the action found
         switch (foundAction) {
@@ -733,10 +785,11 @@ public class FarmTreeRunScript extends Script {
             case "Inspect":
                 if (handlePlantingTree(treePatch, patch, config))
                     treePlanted = true;
-                if (treePlanted && handlePayment(config, patch, PaymentKind.PROTECT))
-                    protectionHandled = true;
-                if (treePlanted && protectionHandled)
-                    done = true;
+                // Protection is best-effort: attempt payment, but a missing/failed payment must
+                // not wedge the run on this patch. Successful planting alone completes the patch.
+                if (treePlanted)
+                    handlePayment(config, patch, PaymentKind.PROTECT);
+                done = treePlanted;
                 break;
             default:
                 System.out.println("Unexpected action found on tree patch: " + foundAction);

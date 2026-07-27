@@ -11,6 +11,7 @@ import net.runelite.client.plugins.microbot.arceuuslibrary.ArceuusLibraryPlugin;
 import net.runelite.client.plugins.microbot.astralrc.AstralRunesPlugin;
 import net.runelite.client.plugins.microbot.birdhouseruns.FornBirdhouseRunsPlugin;
 import net.runelite.client.plugins.microbot.autofishing.AutoFishingPlugin;
+import net.runelite.client.plugins.microbot.irkedfarmer.IrkedFarmerPlugin;
 import net.runelite.client.plugins.microbot.crafting.jewelry.JewelryPlugin;
 import net.runelite.client.plugins.microbot.example.ExamplePlugin;
 import net.runelite.client.plugins.microbot.karambwans.GabulhasKarambwansPlugin;
@@ -28,13 +29,7 @@ public class Microbot
 
 	private static final Class<?>[] debugPlugins = {
 		AgentServerPlugin.class,
-		FornBirdhouseRunsPlugin.class,
-		GiantSeaweedFarmerPlugin.class,
-		PitfallHunterPlugin.class,
-		GabulhasKarambwansPlugin.class,
-		MotherloadMinePlugin.class,
-		KourendLibraryPlugin.class,
-		ArceuusLibraryPlugin.class
+		IrkedFarmerPlugin.class
 	};
 
     public static void main(String[] args) throws Exception
