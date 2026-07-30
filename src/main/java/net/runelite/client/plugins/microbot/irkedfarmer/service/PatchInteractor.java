@@ -84,8 +84,12 @@ public final class PatchInteractor {
 
         switch (foundAction) {
             case "Check":
+                // "Check" means the patch is still growing — nothing plantable/harvestable/payable
+                // yet, and there's no automated cure action, so one informational click is all we
+                // do. Previously returned RETRY, which made PatchRunner spam this click up to
+                // MAX_PASSES_PER_PATCH times (~15-30s) on every still-growing patch before giving up.
                 checkHealth(obj);
-                return Outcome.RETRY;
+                return Outcome.GROWING;
             case "Chop":
                 return payment(cfg, patch, PaymentKind.CLEAR) ? Outcome.RETRY : Outcome.NOT_FOUND;
             case "Pick":

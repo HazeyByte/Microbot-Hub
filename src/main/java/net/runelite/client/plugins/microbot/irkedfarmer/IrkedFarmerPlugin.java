@@ -33,7 +33,7 @@ import javax.inject.Inject;
 )
 @Slf4j
 public class IrkedFarmerPlugin extends Plugin {
-    public static final String version = "0.9.4";
+    public static final String version = "0.9.6";
 
     @Inject
     private IrkedFarmerConfig config;

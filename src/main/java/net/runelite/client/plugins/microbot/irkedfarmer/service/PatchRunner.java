@@ -26,6 +26,10 @@ public final class PatchRunner {
 
     private static final int ARRIVE_DISTANCE = 6;
     private static final int MAX_PASSES_PER_PATCH = 25;
+    // Same pattern as AgilityScript's stuck watchdog: N consecutive passes with no observable
+    // progress (position AND animation both unchanged) means genuinely wedged, not just a slow
+    // dialogue/click — force a re-approach instead of burning the rest of the pass budget waiting.
+    private static final int STUCK_THRESHOLD = 3;
 
     public static TaskResult run(String taskName, IrkedFarmerConfig cfg, InventoryPlan plan, List<FarmPatch> patches) {
         if (!plan.feasible()) {
@@ -58,22 +62,44 @@ public final class PatchRunner {
         return TaskResult.completed(taskName + ": handled " + handled + ", skipped " + skipped);
     }
 
-    /** Walk to the patch; returns true once within interaction range. Walker has its own timeout. */
+    /** True once arrived at the patch — same plane too, not just 2D-close (an elevated walkway or
+     *  staircase can put the player within 2D range but on the wrong level, which reads as "arrived"
+     *  if plane is ignored). */
+    private static boolean arrived(WorldPoint loc, int slack) {
+        WorldPoint here = Rs2Player.getWorldLocation();
+        if (here == null || here.getPlane() != loc.getPlane()) {
+            return false;
+        }
+        int d = Rs2Player.distanceTo(loc);
+        return d >= 0 && d <= slack;
+    }
+
+    /** Walk to the patch; returns true once within interaction range. One retry on a wedged first
+     *  attempt (same recovery shape as AgilityScript's stuck watchdog) before giving up. */
     private static boolean route(FarmPatch patch) {
         WorldPoint loc = patch.getLocation();
-        if (Rs2Player.distanceTo(loc) >= 0 && Rs2Player.distanceTo(loc) <= ARRIVE_DISTANCE) {
+        if (arrived(loc, ARRIVE_DISTANCE)) {
             return true;
         }
         // ponytail: default walker routing (handles teleports/transports). Tree Gnome Village maze +
         // instanced patches (Prifddinas/Fossil) need dedicated routing — tracked as slice 2b-next;
         // until then they degrade to a logged skip rather than a stuck bot.
         Rs2Walker.walkTo(loc, ARRIVE_DISTANCE);
-        int d = Rs2Player.distanceTo(loc);
-        return d >= 0 && d <= ARRIVE_DISTANCE + 2;
+        if (arrived(loc, ARRIVE_DISTANCE + 2)) {
+            return true;
+        }
+        log.info("irkedFarmer: first approach to {} didn't land — retrying once", patch.name());
+        Rs2Walker.walkTo(loc, ARRIVE_DISTANCE);
+        return arrived(loc, ARRIVE_DISTANCE + 2);
     }
 
-    /** Drive the patch FSM until it settles; bounded so it can't loop forever. */
+    /** Drive the patch FSM until it settles; bounded so it can't loop forever. Also watches for
+     *  zero real-world progress (position AND animation both frozen) across consecutive RETRY
+     *  passes — a dialogue/click can legitimately wedge the same way an agility obstacle can, so
+     *  this uses the same re-approach recovery instead of just burning through the pass budget. */
     private static boolean interactToCompletion(IrkedFarmerConfig cfg, FarmPatch patch) {
+        WorldPoint lastPos = null;
+        int stuckPasses = 0;
         for (int pass = 0; pass < MAX_PASSES_PER_PATCH; pass++) {
             if (!Microbot.isLoggedIn()) {
                 return false;
@@ -87,6 +113,16 @@ public final class PatchRunner {
                     return false;
                 case RETRY:
                 default:
+                    WorldPoint pos = Rs2Player.getWorldLocation();
+                    boolean noProgress = pos != null && pos.equals(lastPos) && !Rs2Player.isAnimating();
+                    stuckPasses = noProgress ? stuckPasses + 1 : 0;
+                    lastPos = pos;
+                    if (stuckPasses >= STUCK_THRESHOLD) {
+                        log.info("[{}] no progress for {} passes — re-approaching to break the wedge",
+                                patch.name(), stuckPasses);
+                        Rs2Walker.walkTo(patch.getLocation(), 2);
+                        stuckPasses = 0;
+                    }
                     Global.sleep(600, 1200);
             }
         }

@@ -66,7 +66,15 @@ public class TaskScheduler {
         }
 
         status = "Running: " + task.name();
-        TaskResult result = task.execute();
+        TaskResult result;
+        try {
+            result = task.execute();
+        } catch (Exception ex) {
+            // A wedged patch/walker inside one task must never take the rest of the queue down with
+            // it — cursor is already advanced above, so the next tick moves on to the next task.
+            log.error("[{}] threw during execute() — skipping to next task", task.name(), ex);
+            result = TaskResult.failed(task.name() + " errored: " + ex.getMessage());
+        }
         log.info("[{}] {}", task.name(), result);
         status = task.name() + " → " + result.status;
         return true;

@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.client.plugins.microbot.questhelper.collections.ItemCollections;
 import net.runelite.client.plugins.microbot.irkedfarmer.IrkedFarmerConfig;
+import net.runelite.client.plugins.microbot.irkedfarmer.model.CompostType;
 import net.runelite.client.plugins.microbot.irkedfarmer.task.InventoryPlan;
 import net.runelite.client.plugins.microbot.irkedfarmer.task.ReservedItem;
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
@@ -48,6 +49,9 @@ public final class BankService {
                 keep.add(e.itemId);
             }
         }
+        if (cfg.compostType() == CompostType.BOTTOMLESS_BUCKET) {
+            keep.add(cfg.compostType().getEmptyItemId());
+        }
         if (!keep.isEmpty()) {
             Rs2Bank.depositAllExcept(keep.toArray(new Integer[0]));
             Rs2Inventory.waitForInventoryChanges(1500);
@@ -59,6 +63,9 @@ public final class BankService {
             if (e.kind == InventoryPlan.Kind.LOOSE || e.kind == InventoryPlan.Kind.STACKABLE) {
                 withdrawTo(e.itemId, e.quantity);
             }
+        }
+        if (cfg.compostType() == CompostType.BOTTOMLESS_BUCKET) {
+            withdrawBottomlessBucket(cfg.compostType());
         }
         for (InventoryPlan.Entry e : plan.entries()) {
             if (e.kind == InventoryPlan.Kind.RESERVED) {
@@ -109,6 +116,20 @@ public final class BankService {
                 Rs2Bank.withdrawAndEquip(piece);
             }
         }
+    }
+
+    /**
+     * The bottomless bucket's plan entry only lists the filled item id, so the normal
+     * {@link #withdrawTo} pass above misses it whenever the bank holds the empty one (the common
+     * case — it needs refilling at a compost bin, which isn't automated here). Fall back to the
+     * empty variant so the bucket at least ends up in the inventory instead of being silently
+     * skipped.
+     */
+    private static void withdrawBottomlessBucket(CompostType compost) {
+        if (Rs2Inventory.hasItem(compost.getItemId()) || Rs2Inventory.hasItem(compost.getEmptyItemId())) {
+            return;
+        }
+        withdrawTo(compost.getEmptyItemId(), 1);
     }
 
     /** Withdraw up to {@code quantity}, accounting for what's already carried. Non-fatal. */
