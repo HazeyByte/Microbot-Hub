@@ -57,7 +57,15 @@ Before writing this spec, three things were verified against the actual client s
 
 ## 3. Data model
 
-Add a minimal `Patch` interface capturing only what's genuinely common across every category:
+**CORRECTION (2026-07-30, during planning):** the original text below claimed `HerbPatch` already has all
+four `Patch` fields/methods — verified false against the actual file. `HerbPatch` has no `configKey`
+(regions are matched by a `switch` on `regionName` to distinct config methods like `enableArdougne()`, not
+a generic keyName) and no `farmingLevel`/`hasRequiredLevel()` (herb level-gating happens via seed selection,
+not per-region). Retrofitting it would mean inventing fields it doesn't need for anything in this
+sub-project — `HerbPatch` already has region-level granularity (§4) and needs no interface to get it. Scope
+correction: **only `FarmPatch` implements `Patch`** in this sub-project. `HerbPatch` is untouched.
+
+Add a minimal `Patch` interface capturing only what's genuinely common across the categories that need it:
 
 ```java
 public interface Patch {
@@ -68,16 +76,14 @@ public interface Patch {
 }
 ```
 
-`FarmPatch` (trees/fruit/hardwood) and `HerbPatch` already have all four as fields/methods today — this is
-a `implements Patch` on each, not a rewrite. Category-specific fields (`objectId`, `leprechaunId`, `kind` on
-`FarmPatch`; herb's varbit-driven fields on `HerbPatch`) stay exactly where they are. No unified schema with
-farmer-services/tools/teleports/banking-strategy as interface methods — those differ enough per category
-(and are out of scope per §6) that forcing them into one interface now would mean speculative no-op methods
-on categories that don't need them yet. Add them to the interface when a sub-project that actually
-implements that behaviour needs it.
+`FarmPatch` (trees/fruit/hardwood) already has all four as fields/methods today — this is
+`implements Patch`, not a rewrite. Category-specific fields (`objectId`, `leprechaunId`, `kind`) stay
+exactly where they are. No unified schema with farmer-services/tools/teleports/banking-strategy as
+interface methods — those differ enough per category (and are out of scope per §6) that forcing them into
+one interface now would mean speculative no-op methods on categories that don't need them yet.
 
-`Patch` exists so config-toggle wiring, enabled-patch filtering, and (later) route ordering can be written
-once against the interface instead of once per concrete enum.
+`Patch` exists so config-toggle wiring and enabled-patch filtering can be written once against the
+interface instead of duplicated per task.
 
 ---
 
@@ -108,17 +114,36 @@ enabled-patch lookup.
 
 ## 5. FarmDue / route-skipping rework
 
+**CORRECTION (2026-07-30, during planning):** two gaps found verifying this section against the actual
+task code. (a) `HardwoodRunTask.isDue()` currently hardcodes `true` with the comment "no FarmingWorld tab
+tracks hardwood (Fossil/Avium); always attempt" — verified accurate, `PatchImplementation` has no hardwood
+entries at the Fossil Island/Avium Savannah locations `FarmPatch` uses. Hardwood gets **no** per-patch
+GROWING-skip; it keeps today's always-attempt behaviour. (b) `Rs2Farming.predictPatchState` takes a
+QuestHelper `FarmingPatch`, not our `FarmPatch` — the two aren't the same type and nothing maps one to the
+other today. That mapping has to be built, not assumed.
+
 - `FarmDue.anyReady(...)` — the current per-task boolean "is this run worth doing" gate — is reimplemented
   on top of `Rs2Farming.getPatchesByTab` / `predictPatchState`, dropping the direct
   `FarmingWorld`/`FarmingHandler`/client-thread wiring that duplicates what `Rs2Farming` already does.
-- New: each task's `enabledPatches()` additionally drops individual patches `Rs2Farming.predictPatchState`
-  reports as `CropState.GROWING`, so the walker never routes to a patch known to still be growing.
-- Patches with no tracked prediction (`null` — never visited, or Timetracking hasn't observed them yet) are
-  **kept in the route**, matching `FarmDue`'s existing "can't predict — attempt rather than silently skip"
-  behaviour. This sub-project must not regress a never-visited patch into being permanently skipped.
-- `HerbPatch`-based tasks (`HerbRunTask`) already do their own per-location due-checking; if it duplicates
-  logic that now lives in the shared helper, consolidate during implementation — no behavioural change
-  intended there beyond removing duplication.
+  Hardwood tasks don't call this (see correction above) and are unaffected.
+- New: a `FarmPatch` → QuestHelper `FarmingPatch` lookup matches by nearest location within a 10-tile
+  tolerance, scoped to the same `Tab`/`PatchImplementation` pair (`Tab.TREE`+`PatchImplementation.TREE` for
+  regular trees, `Tab.TREE`+`PatchImplementation.FRUIT_TREE` for fruit trees) — tolerance instead of exact
+  `WorldPoint` equality because `FarmPatch`'s hardcoded coordinates and the patch's tracked anchor tile
+  aren't guaranteed to be the identical tile (see `docs/PLUGIN_DEBUGGING_NOTES.md` §7's documented
+  hardcoded-coordinate-drift pattern — same tolerance-based approach used there). Regional patches of the
+  same kind are hundreds of tiles apart, so a 10-tile tolerance can't cross-match the wrong patch.
+- `TreeRunTask`/`FruitTreeRunTask`'s `enabledPatches()` additionally drops individual patches whose matched
+  `FarmingPatch` predicts `CropState.GROWING`, so the walker never routes to a patch known to still be
+  growing. `HardwoodRunTask`'s `enabledPatches()` is unchanged (level filter + new per-patch config toggle
+  only, per §4).
+- Patches with no match found, or a match with no tracked prediction (`null` — never visited, or
+  Timetracking hasn't observed them yet), are **kept in the route**, matching `FarmDue`'s existing "can't
+  predict — attempt rather than silently skip" behaviour. This sub-project must not regress a never-visited
+  patch into being permanently skipped.
+- `HerbPatch`-based tasks (`HerbRunTask`) already do their own per-location due-checking via
+  `FarmingHandler.predictPatch` directly; out of scope for this rework (§3 correction — `HerbPatch` isn't
+  touched in this sub-project).
 
 ---
 
@@ -140,9 +165,9 @@ enabled-patch lookup.
 ## 7. Verification
 
 - **Build green**: `./gradlew build -PpluginList=IrkedFarmerPlugin`.
-- **Self-check (no client):** every existing `FarmPatch`/`HerbPatch` entry has a corresponding
-  `@ConfigItem` and resolves through the new `Patch`-typed enabled-patch filter; toggling a patch off
-  removes it from `enabledPatches()` without affecting others.
+- **Self-check (no client):** every existing `FarmPatch` entry has a corresponding `@ConfigItem` and
+  resolves through the new `Patch`-typed enabled-patch filter; toggling a patch off removes it from
+  `enabledPatches()` without affecting others. `HerbPatch` is unchanged and out of scope.
 - **Live test:** disable all but one tree patch, confirm the run only visits that patch; confirm a patch
   `Rs2Farming` predicts as `GROWING` (freshly planted, revisited before maturity) is skipped without a
   walk; confirm a never-visited patch (no tracked prediction) is still attempted.
