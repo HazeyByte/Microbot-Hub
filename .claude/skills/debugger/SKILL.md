@@ -131,7 +131,9 @@ Brief Sonnet with:
 pkill -f 'net.runelite.client.RuneLite' || true
 
 # Launch (this compiles the Hub plugins + pulls the microbot client JAR)
-./gradlew run --args='--debug' > /tmp/microbot-hub.log 2>&1 &
+# --safe-mode disables the GPU plugin only (debugPlugins still load — that path ignores safe-mode)
+# so this can't wedge the client thread by contending for GPU/VRAM with another running client
+./gradlew run --args='--debug --safe-mode' > /tmp/microbot-hub.log 2>&1 &
 
 # Poll /state until it responds (cold JVM + gradle init can take ~90s)
 until curl -sS --max-time 2 http://127.0.0.1:8081/state > /dev/null 2>&1; do sleep 2; done
@@ -248,7 +250,7 @@ Ask Sonnet to return compile errors verbatim on failure. If the build fails, **y
 ```bash
 pkill -f 'net.runelite.client.RuneLite' || true
 until ! curl -sS --max-time 1 http://127.0.0.1:8081/state > /dev/null 2>&1; do sleep 1; done
-./gradlew run --args='--debug' > /tmp/microbot-hub.log 2>&1 &
+./gradlew run --args='--debug --safe-mode' > /tmp/microbot-hub.log 2>&1 &
 until curl -sS --max-time 2 http://127.0.0.1:8081/state > /dev/null 2>&1; do sleep 2; done
 ../Microbot/microbot-cli login now --timeout 60
 ../Microbot/microbot-cli widgets click --text "Click here to play"   # if present

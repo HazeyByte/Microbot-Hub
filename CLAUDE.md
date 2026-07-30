@@ -36,7 +36,9 @@ The build system uses **Gradle with custom plugin discovery and packaging**:
 ./gradlew copyPluginDocs
 
 # Launch RuneLite debug session with plugins from Microbot.java
-./gradlew run --args='--debug'
+# --safe-mode disables the GPU plugin so a debug client doesn't fight your live client for GPU/VRAM
+# (root cause of a client hang/crash: two GPU-rendered clients running at once wedge the client thread)
+./gradlew run --args='--debug --safe-mode'
 
 # Validate JDK version
 ./gradlew validateJdkVersion
@@ -139,7 +141,8 @@ If a plugin needs additional libraries beyond the Microbot client:
        AutoLoginPlugin.class
    };
    ```
-3. Run `./gradlew run --args='--debug'` or use your IDE's run configuration
+3. Run `./gradlew run --args='--debug --safe-mode'` or use your IDE's run configuration
+   - `--safe-mode` disables the GPU plugin only — it does **not** block plugins in `debugPlugins`, since those load via `MicrobotPluginManager.loadCorePlugins()`, a path safe-mode doesn't gate (it only skips sideloaded plugins). Always include it if a live client may be running alongside the debug session — running two GPU-rendered clients concurrently can wedge the client thread and hang both.
 
 ### Running Tests
 
