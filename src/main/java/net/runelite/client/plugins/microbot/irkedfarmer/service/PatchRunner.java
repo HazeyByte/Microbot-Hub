@@ -35,6 +35,9 @@ public final class PatchRunner {
         if (!plan.feasible()) {
             return TaskResult.infeasible(taskName + " plan needs " + plan.slotCount() + " slots (>28)");
         }
+        if (patches.isEmpty()) {
+            return TaskResult.skipped(taskName + ": nothing due (all patches growing or disabled)");
+        }
         if (!BankService.prepare(plan, cfg)) {
             return TaskResult.failed(taskName + ": could not open bank to prepare inventory");
         }
