@@ -173,6 +173,38 @@ public interface IrkedFarmerConfig extends Config {
         return false;
     }
 
+    @ConfigItem(keyName = "gnomeStrongholdTree", name = "Gnome Stronghold", description = "Gnome Stronghold tree patch",
+            section = treesSection, position = 2)
+    default boolean gnomeStrongholdTree() { return true; }
+
+    @ConfigItem(keyName = "farmingGuildTree", name = "Farming Guild", description = "Farming Guild tree patch",
+            section = treesSection, position = 3)
+    default boolean farmingGuildTree() { return true; }
+
+    @ConfigItem(keyName = "taverleyTree", name = "Taverley", description = "Taverley tree patch",
+            section = treesSection, position = 4)
+    default boolean taverleyTree() { return true; }
+
+    @ConfigItem(keyName = "faladorTree", name = "Falador", description = "Falador tree patch",
+            section = treesSection, position = 5)
+    default boolean faladorTree() { return true; }
+
+    @ConfigItem(keyName = "lumbridgeTree", name = "Lumbridge", description = "Lumbridge tree patch",
+            section = treesSection, position = 6)
+    default boolean lumbridgeTree() { return true; }
+
+    @ConfigItem(keyName = "varrockTree", name = "Varrock", description = "Varrock tree patch",
+            section = treesSection, position = 7)
+    default boolean varrockTree() { return true; }
+
+    @ConfigItem(keyName = "auburnvaleTree", name = "Auburnvale", description = "Auburnvale tree patch",
+            section = treesSection, position = 8)
+    default boolean auburnvaleTree() { return true; }
+
+    @ConfigItem(keyName = "prifddinasCrystal", name = "Prifddinas (Crystal)", description = "Prifddinas crystal tree patch (requires level 74)",
+            section = treesSection, position = 9)
+    default boolean prifddinasCrystal() { return true; }
+
     // ---- Fruit trees ----
     @ConfigSection(name = "Fruit Trees", description = "Fruit tree run settings", position = 3, closedByDefault = true)
     String fruitSection = "fruit";
@@ -189,6 +221,34 @@ public interface IrkedFarmerConfig extends Config {
         return false;
     }
 
+    @ConfigItem(keyName = "gnomeStrongholdFruit", name = "Gnome Stronghold", description = "Gnome Stronghold fruit tree patch",
+            section = fruitSection, position = 2)
+    default boolean gnomeStrongholdFruit() { return true; }
+
+    @ConfigItem(keyName = "treeGnomeVillageFruit", name = "Tree Gnome Village", description = "Tree Gnome Village fruit tree patch",
+            section = fruitSection, position = 3)
+    default boolean treeGnomeVillageFruit() { return true; }
+
+    @ConfigItem(keyName = "farmingGuildFruit", name = "Farming Guild", description = "Farming Guild fruit tree patch (requires level 85)",
+            section = fruitSection, position = 4)
+    default boolean farmingGuildFruit() { return true; }
+
+    @ConfigItem(keyName = "brimhavenFruit", name = "Brimhaven", description = "Brimhaven fruit tree patch",
+            section = fruitSection, position = 5)
+    default boolean brimhavenFruit() { return true; }
+
+    @ConfigItem(keyName = "catherbyFruit", name = "Catherby", description = "Catherby fruit tree patch",
+            section = fruitSection, position = 6)
+    default boolean catherbyFruit() { return true; }
+
+    @ConfigItem(keyName = "lletyaFruit", name = "Lletya", description = "Lletya fruit tree patch",
+            section = fruitSection, position = 7)
+    default boolean lletyaFruit() { return true; }
+
+    @ConfigItem(keyName = "kastoriFruit", name = "Kastori (Varlamore)", description = "Kastori fruit tree patch",
+            section = fruitSection, position = 8)
+    default boolean kastoriFruit() { return true; }
+
     // ---- Hardwood ----
     @ConfigSection(name = "Hardwood", description = "Hardwood tree run settings", position = 4, closedByDefault = true)
     String hardwoodSection = "hardwood";
@@ -204,6 +264,14 @@ public interface IrkedFarmerConfig extends Config {
     default boolean protectHardwood() {
         return false;
     }
+
+    @ConfigItem(keyName = "fossilHardwood", name = "Fossil Island", description = "Fossil Island hardwood patches",
+            section = hardwoodSection, position = 2)
+    default boolean fossilHardwood() { return true; }
+
+    @ConfigItem(keyName = "aviumHardwood", name = "Avium Savannah", description = "Avium Savannah hardwood patch",
+            section = hardwoodSection, position = 3)
+    default boolean aviumHardwood() { return true; }
 
     // ---- Herbs ----
     @ConfigSection(name = "Herbs", description = "Herb run settings (herb + flower + allotment patches)", position = 5, closedByDefault = true)
