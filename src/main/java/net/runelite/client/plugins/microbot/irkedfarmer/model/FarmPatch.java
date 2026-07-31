@@ -20,7 +20,7 @@ import java.util.stream.Collectors;
  */
 @Getter
 @RequiredArgsConstructor
-public enum FarmPatch {
+public enum FarmPatch implements Patch {
     GNOME_STRONGHOLD_FRUIT(7962, new WorldPoint(2473, 3446, 0), TreeKind.FRUIT_TREE, 1, 0, "gnomeStrongholdFruit"),
     GNOME_STRONGHOLD_TREE(19147, new WorldPoint(2437, 3417, 0), TreeKind.TREE, 1, 0, "gnomeStrongholdTree"),
     TREE_GNOME_VILLAGE_FRUIT(7963, new WorldPoint(2490, 3181, 0), TreeKind.FRUIT_TREE, 1, 0, "treeGnomeVillageFruit"),
