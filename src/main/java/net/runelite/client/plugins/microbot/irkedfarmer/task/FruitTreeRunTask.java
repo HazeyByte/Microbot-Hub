@@ -1,15 +1,14 @@
 package net.runelite.client.plugins.microbot.irkedfarmer.task;
 
 import lombok.RequiredArgsConstructor;
-import net.runelite.client.callback.ClientThread;
-import net.runelite.client.config.ConfigManager;
 import net.runelite.client.plugins.microbot.irkedfarmer.IrkedFarmerConfig;
 import net.runelite.client.plugins.microbot.irkedfarmer.model.FarmPatch;
 import net.runelite.client.plugins.microbot.irkedfarmer.model.TreeKind;
 import net.runelite.client.plugins.microbot.irkedfarmer.service.FarmDue;
 import net.runelite.client.plugins.microbot.irkedfarmer.service.InventoryPlanner;
 import net.runelite.client.plugins.microbot.irkedfarmer.service.PatchRunner;
-import net.runelite.client.plugins.microbot.questhelper.helpers.mischelpers.farmruns.FarmingWorld;
+import net.runelite.client.plugins.microbot.questhelper.helpers.mischelpers.farmruns.CropState;
+import net.runelite.client.plugins.microbot.questhelper.helpers.mischelpers.farmruns.PatchImplementation;
 import net.runelite.client.plugins.timetracking.Tab;
 
 import java.util.List;
@@ -19,9 +18,6 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class FruitTreeRunTask implements FarmingTask {
     private final IrkedFarmerConfig cfg;
-    private final FarmingWorld farmingWorld;
-    private final ClientThread clientThread;
-    private final ConfigManager configManager;
 
     @Override
     public String name() {
@@ -35,7 +31,7 @@ public class FruitTreeRunTask implements FarmingTask {
 
     @Override
     public boolean isDue() {
-        return cfg.runWhenNothingDue() || FarmDue.anyReady(farmingWorld, clientThread, configManager, Tab.FRUIT_TREE);
+        return cfg.runWhenNothingDue() || FarmDue.anyReady(Tab.FRUIT_TREE);
     }
 
     @Override
@@ -52,6 +48,8 @@ public class FruitTreeRunTask implements FarmingTask {
     private List<FarmPatch> enabledPatches() {
         return FarmPatch.ofKind(TreeKind.FRUIT_TREE).stream()
                 .filter(FarmPatch::hasRequiredLevel)
+                .filter(FarmPatch::isEnabled)
+                .filter(p -> FarmDue.predictNearest(p.getLocation(), Tab.FRUIT_TREE, PatchImplementation.FRUIT_TREE) != CropState.GROWING)
                 .collect(Collectors.toList());
     }
 }
