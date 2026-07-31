@@ -72,8 +72,8 @@ public class IrkedFarmerScript extends Script {
      */
     private List<FarmingTask> buildTasks(IrkedFarmerConfig config) {
         return new ArrayList<>(Arrays.asList(
-                new TreeRunTask(config, farmingWorld, clientThread, configManager),
-                new FruitTreeRunTask(config, farmingWorld, clientThread, configManager),
+                new TreeRunTask(config),
+                new FruitTreeRunTask(config),
                 new HardwoodRunTask(config),
                 new HerbRunTask(config, farmingWorld, clientThread, configManager),
                 new BirdhouseRunTask(config)

@@ -44,6 +44,7 @@ public class HardwoodRunTask implements FarmingTask {
     private List<FarmPatch> enabledPatches() {
         return FarmPatch.ofKind(TreeKind.HARD_TREE).stream()
                 .filter(FarmPatch::hasRequiredLevel)
+                .filter(FarmPatch::isEnabled)
                 .collect(Collectors.toList());
     }
 }
