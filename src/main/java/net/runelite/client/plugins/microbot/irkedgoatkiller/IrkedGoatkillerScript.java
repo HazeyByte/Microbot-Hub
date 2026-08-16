@@ -3,6 +3,7 @@ package net.runelite.client.plugins.microbot.irkedgoatkiller;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Actor;
 import net.runelite.api.ChatMessageType;
+import net.runelite.api.GameObject;
 import net.runelite.api.IterableHashTable;
 import net.runelite.api.MessageNode;
 import net.runelite.api.NPC;
@@ -31,22 +32,23 @@ import static net.runelite.client.plugins.microbot.util.Global.sleep;
 import static net.runelite.client.plugins.microbot.util.Global.sleepUntil;
 
 /**
- * Wyrmscraig goat hunting (Hunter 60+, Sheep Herder). One cycle: take spikes (only when out) → Line the
- * pit ONCE → Telekinetic-Grab goats on the far side of the pit until it fills → Clear → drop horns, keep
- * fur → bank when full → repeat.
+ * Wyrmscraig goat hunting (Hunter 60+, Sheep Herder). One fill cycle: take a spike (only when out) →
+ * Line the pit ONCE → Telekinetic-Grab goats on the far side of the pit until it fills → Clear (this
+ * harvests fur + horn AND breaks the spikes) → drop horns, keep fur → re-line → repeat. Bank when full.
  *
- * State is an explicit {@link PitState} driven by POLLING the chat buffer ({@link #pollChat}), because:
- *   (a) EventBus @Subscribe throws LambdaConversionException for this sideloaded plugin (Plugin or Script),
- *   (b) the pit object keeps id 62343 in every state, so object-id detection is useless.
- * Chat lines: "you line the pit…"→SPIKED, "pit is now filled…"→FULL, "need to replace the spikes…"→EMPTY.
+ * State is read straight off the pit object every tick ({@link #readPitState}). The pit keeps object id
+ * 62343 in every state, but its menu action does not — Line (empty) → Check (spiked, no goats) →
+ * Clear (one or more goats). That action IS the state, so we never have to guess or force a transition.
+ * Chat is used only as the "pit is now filled" signal, with a grab-count fallback if that line is missed.
  *
- * Targeting uses the LIVE player position: goats are all around, so we grab the nearest one with the pit
- * between us and it (pulled across the pit). Selection runs in one client-thread hop.
+ * Grabbing: stand anywhere by the pit; a goat is lured across the pit toward the player, so we target the
+ * nearest goat with the pit between us and it. Goats already moving (being lured) or on cooldown are
+ * skipped, so we never re-cast the same goat. Selection + object reads run on the client thread.
  */
 @Slf4j
 public class IrkedGoatkillerScript extends Script {
 
-    private enum PitState { EMPTY, SPIKED, FULL }
+    private enum PitState { EMPTY, SPIKED, GOATS }
 
     private static final String GOAT_PIT = "Goat Pit";
     private static final String SPIKES_SUPPLY = "Spikes supply";
@@ -60,16 +62,15 @@ public class IrkedGoatkillerScript extends Script {
     private static final WorldPoint SPIKES_TILE = new WorldPoint(2578, 2202, 0);
     private static final WorldPoint BANK_TILE = new WorldPoint(2587, 2260, 0);
     private static final int PIT_HUNT_RANGE = 5;
+    private static final int SPIKE_STOCK = 3;            // take a few at once so we don't walk every fill
 
-    private static final long GRAB_COOLDOWN_MS = 3000;
-    private static final long LINE_CONFIRM_MS = 4000;   // wait for "you line the pit" before retrying
-    private static final int MAX_PIT_CAPACITY = 24;     // safety: force FULL if chat missed (lvl 99 cap)
+    private static final long GRAB_COOLDOWN_MS = 3600;   // ~6 ticks: covers cast→move latency, lets misses retry
+    private static final int MAX_PIT_CAPACITY = 24;      // fallback FULL if the chat line is missed (lvl 99 cap)
 
     private volatile PitState pit = PitState.EMPTY;
+    private volatile boolean fullSignaled;               // chat: "the pit is now filled with goats"
     private volatile int lastChatId = Integer.MIN_VALUE;
-    private volatile boolean chatInit = false;
-    private long lastLineMs;
-    private int lineAttempts;
+    private volatile boolean chatInit;
     private int grabsSinceLine;
 
     // Stats for the overlay.
@@ -86,16 +87,23 @@ public class IrkedGoatkillerScript extends Script {
         mainScheduledFuture = scheduledExecutorService.scheduleWithFixedDelay(() -> {
             try {
                 if (!Microbot.isLoggedIn() || !super.run()) return;
+
+                // The pit object is the source of truth; chat only flags "full".
+                PitState live = Microbot.getClientThread().invoke(this::readPitState);
+                if (live != null) pit = live;
                 Microbot.getClientThread().invoke(this::pollChat);
 
-                if (pit == PitState.FULL) {
-                    state = "clearing";
-                    clearPit(config);
-                    return;
-                }
+                boolean full = pit == PitState.GOATS && (fullSignaled || grabsSinceLine >= MAX_PIT_CAPACITY);
+
+                // Bank before harvesting into a full inventory, or the fur would drop on the ground.
                 if (Rs2Inventory.isFull()) {
                     state = "banking";
                     bankFur();
+                    return;
+                }
+                if (full) {
+                    state = "clearing";
+                    clearPit(config);
                     return;
                 }
                 if (pit == PitState.EMPTY) {
@@ -112,7 +120,17 @@ public class IrkedGoatkillerScript extends Script {
         return true;
     }
 
-    /** Runs on the client thread. Scan new chat lines and update pit state. */
+    /** Client thread. State = the pit's current menu action (it morphs but keeps id 62343). */
+    private PitState readPitState() {
+        GameObject pitObj = Rs2GameObject.getGameObject(GOAT_PIT);
+        if (pitObj == null) return null;   // out of range / not rendered → keep last known
+        if (Rs2GameObject.hasAction(pitObj, "Line")) return PitState.EMPTY;
+        if (Rs2GameObject.hasAction(pitObj, "Clear")) return PitState.GOATS;
+        if (Rs2GameObject.hasAction(pitObj, "Check")) return PitState.SPIKED;
+        return null;
+    }
+
+    /** Runs on the client thread. Only watches for the "pit is full" line. */
     private Boolean pollChat() {
         IterableHashTable<MessageNode> msgs = Microbot.getClient().getMessages();
         if (msgs == null) return Boolean.TRUE;
@@ -125,44 +143,34 @@ public class IrkedGoatkillerScript extends Script {
             if (t != ChatMessageType.GAMEMESSAGE && t != ChatMessageType.SPAM && t != ChatMessageType.MESBOX) {
                 continue;
             }
-            String m = n.getValue().toLowerCase();
-            if (m.contains("pit is now filled with goats")) {
-                pit = PitState.FULL;
-            } else if (m.contains("you line the pit")) {
-                pit = PitState.SPIKED;
-                grabsSinceLine = 0;
-                lineAttempts = 0;
-            } else if (m.contains("need to replace the spikes")) {
-                pit = PitState.EMPTY;
-                lineAttempts = 0;
+            if (n.getValue().toLowerCase().contains("pit is now filled with goats")) {
+                fullSignaled = true;
             }
         }
         lastChatId = newMax;
-        chatInit = true;   // first pass just establishes the high-water mark
+        chatInit = true;
         return Boolean.TRUE;
     }
 
-    /** EMPTY: get spikes if out, then Line the pit exactly once (chat flips us to SPIKED). */
+    /** EMPTY: get a spike if out, then Line the pit. Next tick's object read confirms SPIKED. */
     private void ensureLined() {
         if (Rs2Inventory.count(WOODEN_SPIKES) < 1) {
             state = "getting spikes";
             walkNear(SPIKES_TILE);
-            Rs2GameObject.interact(SPIKES_SUPPLY, "Take");
-            sleepUntil(() -> Rs2Inventory.count(WOODEN_SPIKES) >= 1, 5000);
+            for (int i = 0; i < SPIKE_STOCK && Rs2Inventory.count(WOODEN_SPIKES) < SPIKE_STOCK; i++) {
+                int had = Rs2Inventory.count(WOODEN_SPIKES);
+                Rs2GameObject.interact(SPIKES_SUPPLY, "Take");
+                sleepUntil(() -> Rs2Inventory.count(WOODEN_SPIKES) > had, 3000);
+            }
             return;
         }
         walkNear(PIT_TILE);
-        if (System.currentTimeMillis() - lastLineMs < LINE_CONFIRM_MS) {
-            sleep(300, 600);   // awaiting the "you line the pit" confirmation — don't spam Line
-            return;
-        }
-        boolean clicked = Rs2GameObject.interact(GOAT_PIT, "Line");
-        lastLineMs = System.currentTimeMillis();
-        // No Line option (already spiked) or two tries with no confirm → assume lined and start hunting.
-        if (!clicked || ++lineAttempts >= 2) {
-            pit = PitState.SPIKED;
+        Rs2GameObject.interact(GOAT_PIT, "Line");
+        // Fresh fill starting: reset the per-fill trackers once the pit actually spikes.
+        if (sleepUntil(() -> readPitStateSafe() == PitState.SPIKED, 3500)) {
             grabsSinceLine = 0;
-            lineAttempts = 0;
+            fullSignaled = false;
+            recentGrabs.clear();
         }
     }
 
@@ -177,16 +185,20 @@ public class IrkedGoatkillerScript extends Script {
             sleep(300, 600);
             return;
         }
-        Rs2Magic.castOn(Rs2Spells.TELEKINETIC_GRAB, goat);   // click spell, then click goat
-        recentGrabs.put(goat.getIndex(), System.currentTimeMillis());
-        grabs.incrementAndGet();
-        if (++grabsSinceLine >= MAX_PIT_CAPACITY) {
-            pit = PitState.FULL;   // safety net if the "filled" chat was missed
+        if (Rs2Magic.castOn(Rs2Spells.TELEKINETIC_GRAB, goat)) {
+            recentGrabs.put(goat.getIndex(), System.currentTimeMillis());
+            grabs.incrementAndGet();
+            if (++grabsSinceLine >= MAX_PIT_CAPACITY) {
+                fullSignaled = true;   // safety net if the "filled" chat was missed
+            }
+            // Let the cast register (player animates / goat starts moving) before picking the next one,
+            // so we don't machine-gun clicks or double-cast the same goat.
+            sleepUntil(() -> Rs2Player.isAnimating() || goat.isMoving(), 1200);
         }
         humanPause();
     }
 
-    /** Client thread. Nearest un-cooled, unclaimed goat on the far side of the pit from the player. */
+    /** Client thread. Nearest idle, un-cooled, unclaimed goat on the far side of the pit. */
     private Rs2NpcModel selectGoat() {
         WorldPoint me = Rs2Player.getWorldLocation();
         if (me == null) return null;
@@ -194,6 +206,7 @@ public class IrkedGoatkillerScript extends Script {
         recentGrabs.values().removeIf(t -> now - t > GRAB_COOLDOWN_MS);
         return Rs2Npc.getNpcs(GOAT)
                 .filter(g -> g.getWorldLocation() != null)
+                .filter(g -> !g.isMoving())                     // already being lured
                 .filter(g -> !recentGrabs.containsKey(g.getIndex()))
                 .filter(g -> !claimedByOther(g))
                 .filter(g -> pitBetween(me, g.getWorldLocation()))
@@ -232,7 +245,7 @@ public class IrkedGoatkillerScript extends Script {
         // Harvest is one tick per goat; wait until the player settles.
         sleepUntil(() -> !Rs2Player.isAnimating() && !Rs2Player.isMoving(), 15000);
         clears.incrementAndGet();
-        pit = PitState.EMPTY;     // spikes broke; re-line next cycle
+        fullSignaled = false;
         grabsSinceLine = 0;
         recentGrabs.clear();
         if (config.dropGoatHorn()) {
@@ -245,7 +258,7 @@ public class IrkedGoatkillerScript extends Script {
     }
 
     /**
-     * Both full (Large fur pouch holds 28, inventory overflows) → walk to the Auchrie bank chest, deposit
+     * Large fur pouch holds 28 and overflows to inventory → walk to the Auchrie bank chest, deposit
      * inventory fur, empty the pouch, deposit the released fur, walk back.
      * ponytail: bank trip uses the web-walker, blocked on Wyrmscraig until the collision map is updated.
      */
@@ -264,6 +277,11 @@ public class IrkedGoatkillerScript extends Script {
         sleep(400, 700);
         Rs2Bank.closeBank();
         Rs2Walker.walkTo(PIT_TILE, 3);
+    }
+
+    /** Client-thread-safe pit read for use inside sleepUntil predicates. */
+    private PitState readPitStateSafe() {
+        return Microbot.getClientThread().invoke(this::readPitState);
     }
 
     private void walkNear(WorldPoint tile) {

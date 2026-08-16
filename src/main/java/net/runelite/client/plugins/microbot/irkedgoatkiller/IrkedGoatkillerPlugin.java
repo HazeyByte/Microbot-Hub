@@ -13,8 +13,9 @@ import javax.inject.Inject;
 /**
  * irkedGoatkiller — automates Wyrmscraig goat hunting (Hunter 60+, Sheep Herder). Telegrab only.
  *
- * State transitions are driven by the Script polling the chat buffer itself ({@code pollChat}); an
- * @Subscribe here throws LambdaConversionException for this sideloaded plugin, so no event wiring.
+ * State is read straight off the pit object each tick (its menu action Line/Check/Clear is the state);
+ * chat is only polled by the Script for the "pit is full" line. No @Subscribe — it throws
+ * LambdaConversionException for this sideloaded plugin, so there is no event wiring here.
  */
 @PluginDescriptor(
         name = PluginConstants.IRKED + "irkedGoatkiller",
@@ -28,7 +29,7 @@ import javax.inject.Inject;
 )
 @Slf4j
 public class IrkedGoatkillerPlugin extends Plugin {
-    public static final String version = "0.7.0";
+    public static final String version = "0.8.0";
 
     @Inject
     private IrkedGoatkillerConfig config;
