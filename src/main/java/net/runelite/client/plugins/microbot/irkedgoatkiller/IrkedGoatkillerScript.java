@@ -74,7 +74,9 @@ public class IrkedGoatkillerScript extends Script {
     private static final WorldPoint STAND_NORTH = new WorldPoint(2572, 2197, 0);
     private static final WorldPoint STAND_WEST = new WorldPoint(2570, 2195, 0);
 
-    private static final int MAX_GRAB_DISTANCE = 13;   // Telegrab reaches ~15; stay inside so a cast never walks us
+    private static final int MAX_GRAB_DISTANCE = 9;    // Telegrab reaches 10 tiles (OSRS); stay inside so a cast
+                                                       // never makes the game walk us. Player→goat distance already
+                                                       // spans the pit sitting between us, so no pit-width subtraction.
     private static final double ACROSS_MIN = 0.35;     // cosine: goat must sit clearly across the pit from us
     private static final int MAX_PIT_CAPACITY = 24;    // grab-count fallback if the "filled" chat is missed
 
