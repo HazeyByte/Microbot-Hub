@@ -62,10 +62,10 @@ public class IrkedGoatkillerScript extends Script {
     private static final WorldPoint SPIKES_TILE = new WorldPoint(2578, 2202, 0);
     private static final WorldPoint BANK_TILE = new WorldPoint(2587, 2260, 0);
     private static final int PIT_HUNT_RANGE = 5;
-    private static final int SPIKE_STOCK = 3;            // take a few at once so we don't walk every fill
 
-    private static final long GRAB_COOLDOWN_MS = 3600;   // ~6 ticks: covers cast→move latency, lets misses retry
+    private static final long GRAB_COOLDOWN_MS = 10000;  // remember clicked goats long enough to not re-cast one
     private static final int MAX_PIT_CAPACITY = 24;      // fallback FULL if the chat line is missed (lvl 99 cap)
+    private static final int TELEGRAB_RANGE = 14;        // Telekinetic Grab reaches 15 tiles; stay just inside
 
     private volatile PitState pit = PitState.EMPTY;
     private volatile boolean fullSignaled;               // chat: "the pit is now filled with goats"
@@ -157,11 +157,11 @@ public class IrkedGoatkillerScript extends Script {
         if (Rs2Inventory.count(WOODEN_SPIKES) < 1) {
             state = "getting spikes";
             walkNear(SPIKES_TILE);
-            for (int i = 0; i < SPIKE_STOCK && Rs2Inventory.count(WOODEN_SPIKES) < SPIKE_STOCK; i++) {
-                int had = Rs2Inventory.count(WOODEN_SPIKES);
-                Rs2GameObject.interact(SPIKES_SUPPLY, "Take");
-                sleepUntil(() -> Rs2Inventory.count(WOODEN_SPIKES) > had, 3000);
-            }
+            WorldPoint me = Rs2Player.getWorldLocation();
+            if (me == null || me.distanceTo(SPIKES_TILE) > 2) return;   // still walking — don't click until we arrive
+            final int had = Rs2Inventory.count(WOODEN_SPIKES);
+            Rs2GameObject.interact(SPIKES_SUPPLY, "Take");
+            sleepUntil(() -> Rs2Inventory.count(WOODEN_SPIKES) > had, 3000);   // one spike is all a lining needs
             return;
         }
         walkNear(PIT_TILE);
@@ -185,6 +185,12 @@ public class IrkedGoatkillerScript extends Script {
             sleep(300, 600);
             return;
         }
+        // A goat can despawn (potted by our own grab) between selection and cast; casting on it then builds a
+        // null-target menu entry that trips other plugins (BankPlugin NPE). Re-check it's still real first.
+        Boolean alive = Microbot.getClientThread().invoke(
+                (java.util.function.Supplier<Boolean>)
+                        () -> goat.getName() != null && goat.getWorldLocation() != null);
+        if (alive == null || !alive) return;
         if (Rs2Magic.castOn(Rs2Spells.TELEKINETIC_GRAB, goat)) {
             recentGrabs.put(goat.getIndex(), System.currentTimeMillis());
             grabs.incrementAndGet();
@@ -206,6 +212,7 @@ public class IrkedGoatkillerScript extends Script {
         recentGrabs.values().removeIf(t -> now - t > GRAB_COOLDOWN_MS);
         return Rs2Npc.getNpcs(GOAT)
                 .filter(g -> g.getWorldLocation() != null)
+                .filter(g -> g.getWorldLocation().distanceTo(me) <= TELEGRAB_RANGE)   // within Telegrab reach
                 .filter(g -> !g.isMoving())                     // already being lured
                 .filter(g -> !recentGrabs.containsKey(g.getIndex()))
                 .filter(g -> !claimedByOther(g))
@@ -241,9 +248,13 @@ public class IrkedGoatkillerScript extends Script {
             sleep(300, 600);
             return;
         }
-        sleep(1500, 2500);
-        // Harvest is one tick per goat; wait until the player settles.
-        sleepUntil(() -> !Rs2Player.isAnimating() && !Rs2Player.isMoving(), 15000);
+        // Harvest runs one goat per tick over many ticks. Wait until the pit is genuinely emptied (its action
+        // reverts to Line / EMPTY) before touching anything — otherwise the FSM sees a transient GOATS state and
+        // telegrabs into an unspiked pit, and we'd drop horns mid-harvest before they're all collected.
+        sleep(1200, 1800);
+        sleepUntil(() -> readPitStateSafe() == PitState.EMPTY, 25000);
+        sleepUntil(() -> !Rs2Player.isAnimating() && !Rs2Player.isMoving(), 6000);
+        sleep(600, 1000);   // let the last harvested item land
         clears.incrementAndGet();
         fullSignaled = false;
         grabsSinceLine = 0;
