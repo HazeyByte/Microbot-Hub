@@ -12,6 +12,7 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.Script;
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
+import net.runelite.client.plugins.microbot.util.camera.Rs2Camera;
 import net.runelite.client.plugins.microbot.util.gameobject.Rs2GameObject;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.magic.Rs2Magic;
@@ -21,6 +22,8 @@ import net.runelite.client.plugins.microbot.util.npc.Rs2NpcModel;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 
+import javax.inject.Singleton;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -28,6 +31,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static net.runelite.client.plugins.microbot.util.Global.sleep;
@@ -35,23 +39,21 @@ import static net.runelite.client.plugins.microbot.util.Global.sleepUntil;
 
 /**
  * Wyrmscraig goat hunting — reliable, state-driven. The player stands on ONE fixed pit-side tile and NEVER
- * moves to grab a goat: only goats on the opposite side of the pit, within Telegrab range of the player's
- * actual position, are valid (out-of-range casts make the game walk you, so they are rejected up front).
+ * moves to grab a goat: only goats on the opposite side of the pit, within Telegrab range (10 tiles; capped
+ * at 9) of the player's actual position, are valid. Out-of-range casts make the game walk you, so they are
+ * rejected before the interaction, and each cast re-validates range after a short human reaction.
  *
- * Loop: line the pit (one spike) → Telegrab opposite-side goats until full → Clear (harvests fur+horn, breaks
- * spikes) → manage loot → re-line. Fur fills the pouch first (invisible) then overflows to the inventory;
- * horns are dropped only to make room; banking happens only when fur genuinely can't be stored.
- *
- * State is coarse-read from the pit object action (Line=EMPTY, Check=SPIKED, Clear=has goats) and made precise
- * by chat ("you line the pit"=SPIKED, "pit is now filled"=FULL, "replace the spikes"=needs re-line). Clearing
- * always breaks the spikes, so clearPit asserts that. Every interaction is one click → wait → verify, and a
- * watchdog stops the script with a reason instead of spinning.
+ * Loot: fur fills the pouch first (auto, invisible) then overflows to the inventory. An inventory policy
+ * classifies items (required / protected / disposable) from config; disposables are bulk-dropped to make room,
+ * and banking only happens when fur genuinely can't be stored. Movement uses fast canvas walking for short
+ * local hops and the web-walker only for the far bank trip (optionally via the agility stepping stone).
  */
+@Singleton
 @Slf4j
 public class IrkedGoatkillerScript extends Script {
 
     private enum PitState { EMPTY, SPIKED, GOATS }
-    enum Task { STARTING, GETTING_SPIKES, LINING, HUNTING, CLEARING, DROPPING_HORNS, BANKING, STOPPED }
+    enum Task { STARTING, GETTING_SPIKES, LINING, HUNTING, CLEARING, MANAGING_LOOT, BANKING, STOPPED }
 
     private static final int GOAT_PIT_ID = 62343;
     private static final int SPIKES_SUPPLY_ID = 62349;
@@ -67,28 +69,27 @@ public class IrkedGoatkillerScript extends Script {
     private static final WorldPoint BANK_TILE = new WorldPoint(2587, 2259, 0);
     private static final WorldPoint STONE_NORTH = new WorldPoint(2565, 2221, 0);
     private static final WorldPoint STONE_SOUTH = new WorldPoint(2565, 2217, 0);
+    private static final int GAP_Y = 2219;   // the stepping-stone gap; south < GAP_Y < north
 
-    // The 12 authoritative standing tiles; we use the middle of the chosen side.
     private static final WorldPoint STAND_SOUTH = new WorldPoint(2572, 2193, 0);
     private static final WorldPoint STAND_EAST = new WorldPoint(2574, 2195, 0);
     private static final WorldPoint STAND_NORTH = new WorldPoint(2572, 2197, 0);
     private static final WorldPoint STAND_WEST = new WorldPoint(2570, 2195, 0);
 
-    private static final int MAX_GRAB_DISTANCE = 9;    // Telegrab reaches 10 tiles (OSRS); stay inside so a cast
-                                                       // never makes the game walk us. Player→goat distance already
-                                                       // spans the pit sitting between us, so no pit-width subtraction.
+    private static final int MAX_GRAB_DISTANCE = 9;    // Telegrab reaches 10 tiles; 1-tile buffer so a cast never walks us
     private static final double ACROSS_MIN = 0.35;     // cosine: goat must sit clearly across the pit from us
     private static final int MAX_PIT_CAPACITY = 24;    // grab-count fallback if the "filled" chat is missed
+    private static final int LOCAL_WALK_TILES = 16;    // within this, canvas-walk instead of the web-walker
 
-    private static final long GRAB_COOLDOWN_MS = 8000; // don't re-cast a goat that hasn't been pulled in yet
-    private static final long LINE_THROTTLE_MS = 5000; // > line confirm time, so we click Line exactly once
+    private static final long GRAB_COOLDOWN_MS = 8000;
+    private static final long LINE_THROTTLE_MS = 5000;
     private static final long TAKE_THROTTLE_MS = 3000;
     private static final long BANK_THROTTLE_MS = 4000;
-    private static final long STUCK_SOFT_MS = 60000;   // no progress → log + re-anchor
-    private static final long STUCK_HARD_MS = 180000;  // no progress → stop with a reason
-    private static final int CAST_FAIL_LIMIT = 6;      // repeated cast failures → out of runes / blocked → stop
+    private static final long STUCK_SOFT_MS = 60000;
+    private static final long STUCK_HARD_MS = 180000;
+    private static final int CAST_FAIL_LIMIT = 6;
 
-    private IrkedGoatkillerConfig config;
+    IrkedGoatkillerConfig config;   // package-private: the overlay reads config flags
     private WorldPoint standTile;
 
     private volatile PitState pit = PitState.EMPTY;
@@ -96,24 +97,31 @@ public class IrkedGoatkillerScript extends Script {
     private volatile boolean spikesBroken;
     private volatile int lastChatId = Integer.MIN_VALUE;
     private volatile boolean chatInit;
+    private boolean agilityDisabledThisTrip;
     private int grabsSinceLine;
     private int castFailStreak;
     private int bankAttempts;
     private long lastTakeMs, lastLineMs, lastBankMs, lastProgressMs, lastSoftWarnMs;
 
-    // Overlay stats.
+    // Overlay state (package-private).
     final AtomicInteger grabs = new AtomicInteger();
     final AtomicInteger clears = new AtomicInteger();
     final AtomicInteger fursBanked = new AtomicInteger();
+    final AtomicInteger hornsDropped = new AtomicInteger();
+    final AtomicInteger furDropped = new AtomicInteger();
+    final AtomicInteger spikesTaken = new AtomicInteger();
+    final AtomicInteger relines = new AtomicInteger();
+    final AtomicInteger recoveries = new AtomicInteger();
     volatile Task task = Task.STARTING;
+    volatile String pitLabel = "?";
+    volatile String route = "-";
+    volatile int validGoats;
     volatile String stopReason = "";
     long startMs;
 
     private final Map<Integer, Long> recentGrabs = new ConcurrentHashMap<>();
-
-    // Selection diagnostics (log only).
-    private volatile int diagSeen, diagEligible, diagDist;
     private volatile double diagScore;
+    private volatile int diagDist, diagSeen;
     private long lastCastMs;
 
     public boolean run(IrkedGoatkillerConfig config) {
@@ -121,8 +129,9 @@ public class IrkedGoatkillerScript extends Script {
         this.standTile = standTileFor(config.standSide());
         startMs = System.currentTimeMillis();
         lastProgressMs = startMs;
-        log.info("[goat] started v1.0.0 | side={} tile={} pouch={} dropHorns={} agility={}",
-                config.standSide(), standTile, config.furPouch(), config.dropGoatHorn(), config.useAgilityShortcut());
+        log.info("[goat] started v1.1.0 | side={} tile={} pouch={} keepHorns={} dropFur={} dropAll={} agility={}",
+                config.standSide(), standTile, config.furPouch(), config.keepGoatHorns(), config.dropGoatFur(),
+                config.dropEverything(), config.useAgilityShortcut());
         mainScheduledFuture = scheduledExecutorService.scheduleWithFixedDelay(() -> {
             try {
                 if (!Microbot.isLoggedIn() || !super.run() || task == Task.STOPPED) return;
@@ -135,27 +144,26 @@ public class IrkedGoatkillerScript extends Script {
     }
 
     private void tick() {
-        // Read pit state: object action (coarse) then chat (authoritative), then force re-line if spikes broke.
         PitState live = Microbot.getClientThread().invoke(this::readPitState);
         if (live != null) pit = live;
         Microbot.getClientThread().invoke(this::pollChat);
         if (spikesBroken) pit = PitState.EMPTY;
+        pitLabel = pit.name();
 
         if (watchdogTripped()) return;
 
         boolean invFull = Rs2Inventory.isFull();
-        int horns = Rs2Inventory.count(GOAT_HORN);
         boolean full = pit == PitState.GOATS && (fullSignaled || grabsSinceLine >= MAX_PIT_CAPACITY);
 
-        // Inventory decisions come first: never harvest/hunt into a full inventory (fur would drop).
-        if (invFull && horns == 0) {           // genuinely no room and nothing disposable → bank
-            setTask(Task.BANKING);
-            bankFur();
-            return;
-        }
-        if (invFull && horns > 0) {             // make room from junk horns, keep hunting the pit
-            setTask(Task.DROPPING_HORNS);
-            dropHorns();
+        // Inventory first: never harvest/hunt into a full inventory. Make room from disposables, else bank.
+        if (invFull) {
+            if (hasDisposables()) {
+                setTask(Task.MANAGING_LOOT);
+                makeRoom();
+            } else {
+                setTask(Task.BANKING);
+                bankFur();
+            }
             return;
         }
         if (full) {
@@ -173,7 +181,6 @@ public class IrkedGoatkillerScript extends Script {
 
     // --- pit state ---
 
-    /** Client thread. Coarse state from the pit's current menu action (it morphs but keeps id 62343). */
     private PitState readPitState() {
         GameObject pitObj = Rs2GameObject.getGameObject(GOAT_PIT_ID);
         if (pitObj == null) return null;
@@ -183,7 +190,6 @@ public class IrkedGoatkillerScript extends Script {
         return null;
     }
 
-    /** Client thread. Chat is authoritative for the announced transitions. */
     private Boolean pollChat() {
         IterableHashTable<MessageNode> msgs = Microbot.getClient().getMessages();
         if (msgs == null) return Boolean.TRUE;
@@ -210,6 +216,7 @@ public class IrkedGoatkillerScript extends Script {
                 grabsSinceLine = 0;
                 fullSignaled = false;
                 recentGrabs.clear();
+                relines.incrementAndGet();
                 progress();
             }
         }
@@ -218,7 +225,7 @@ public class IrkedGoatkillerScript extends Script {
         return Boolean.TRUE;
     }
 
-    // --- LINE: get a spike, stand on the tile, line once ---
+    // --- LINE ---
 
     private void lineCycle() {
         if (Rs2Inventory.count(WOODEN_SPIKES) < 1) {
@@ -227,16 +234,16 @@ public class IrkedGoatkillerScript extends Script {
             return;
         }
         setTask(Task.LINING);
-        if (!ensureAtTile()) return;   // walk back to our tile first (never toward a goat)
+        if (!ensureAtTile()) return;
         if (System.currentTimeMillis() - lastLineMs > LINE_THROTTLE_MS) {
             lastLineMs = System.currentTimeMillis();
             log.info("[goat] line pit (one click)");
-            Rs2GameObject.interact(GOAT_PIT_ID, "Line");   // "you line the pit" chat confirms → SPIKED next tick
+            Rs2GameObject.interact(GOAT_PIT_ID, "Line");   // "you line the pit" confirms → SPIKED next tick
         }
     }
 
     private void getSpike() {
-        WorldPoint me = Rs2Player.getWorldLocation();
+        WorldPoint me = pos();
         if (me == null) return;
         if (me.distanceTo(SPIKES_TILE) > 2) {
             walkStep(SPIKES_TILE, 2);
@@ -247,31 +254,27 @@ public class IrkedGoatkillerScript extends Script {
             final int had = Rs2Inventory.count(WOODEN_SPIKES);
             log.info("[goat] take spike (one click, have {})", had);
             Rs2GameObject.interact(SPIKES_SUPPLY_ID, "Take");
-            if (sleepUntil(() -> Rs2Inventory.count(WOODEN_SPIKES) > had, 3000)) progress();
-            else log.info("[goat] spike not acquired within 3s — will retry");
+            if (sleepUntil(() -> Rs2Inventory.count(WOODEN_SPIKES) > had, 3000)) {
+                spikesTaken.incrementAndGet();
+                progress();
+            } else {
+                log.info("[goat] spike not acquired within 3s — will retry");
+            }
         }
     }
 
-    // --- HUNT: stationary, opposite-side, in-range only ---
+    // --- HUNT ---
 
     private void huntCycle() {
-        if (!ensureAtTile()) return;   // if we ever drifted off our tile, re-anchor (not toward a goat)
+        if (!ensureAtTile()) return;
         Rs2NpcModel goat = Microbot.getClientThread().invoke(this::selectGoat);
         if (goat == null) {
-            sleep(300, 600);   // no valid opposite-side target in range → wait and re-evaluate
+            sleep(300, 600);
             return;
         }
-        WorldPoint me = Rs2Player.getWorldLocation();
-        // Re-validate on the client thread immediately before casting: still alive AND still in range from where
-        // we actually stand (a moved/despawned goat would make the game walk us or build a null-target entry).
-        Boolean ok = Microbot.getClientThread().invoke((java.util.function.Supplier<Boolean>) () -> {
-            WorldPoint g = goat.getWorldLocation();
-            WorldPoint p = Rs2Player.getWorldLocation();
-            return goat.getName() != null && g != null && p != null && p.distanceTo(g) <= MAX_GRAB_DISTANCE;
-        });
-        if (ok == null || !ok) return;
-
-        if (Rs2Magic.castOn(Rs2Spells.TELEKINETIC_GRAB, goat)) {
+        WorldPoint me = pos();
+        int result = telegrab(goat);   // 1 = grabbed, 0 = aborted (goat moved), -1 = failed (runes/click)
+        if (result > 0) {
             long now = System.currentTimeMillis();
             long gap = lastCastMs == 0 ? 0 : now - lastCastMs;
             lastCastMs = now;
@@ -280,14 +283,14 @@ public class IrkedGoatkillerScript extends Script {
             grabs.incrementAndGet();
             grabsSinceLine++;
             progress();
-            log.info("[goat] grab #{} idx={} score={} dist={} eligible={}/{} sinceLine={} pos={},{} gapMs={}",
-                    grabs.get(), goat.getIndex(), String.format("%.2f", diagScore), diagDist, diagEligible, diagSeen,
+            log.info("[goat] grab #{} idx={} score={} dist={} valid={}/{} sinceLine={} pos={},{} gapMs={}",
+                    grabs.get(), goat.getIndex(), String.format("%.2f", diagScore), diagDist, validGoats, diagSeen,
                     grabsSinceLine, me != null ? me.getX() : -1, me != null ? me.getY() : -1, gap);
             if (grabsSinceLine >= MAX_PIT_CAPACITY) fullSignaled = true;
-            sleepUntil(() -> Rs2Player.isAnimating() || goat.isMoving(), 1200);   // let the cast register
-        } else {
+            sleepUntil(() -> Rs2Player.isAnimating() || goat.isMoving(), 1200);
+        } else if (result < 0) {
             castFailStreak++;
-            log.info("[goat] cast returned false (streak={}) — out of runes / blocked?", castFailStreak);
+            log.info("[goat] cast failed (streak={}) — out of runes / blocked?", castFailStreak);
             if (castFailStreak >= CAST_FAIL_LIMIT) {
                 stop("telegrab failed " + castFailStreak + " times in a row (out of runes / spell blocked)");
             }
@@ -296,17 +299,36 @@ public class IrkedGoatkillerScript extends Script {
     }
 
     /**
-     * Client thread. The idle, un-cooled, unclaimed goat sitting most directly across the pit from us, within
-     * Telegrab range of our actual position. Never returns a goat that would require walking to reach.
+     * Telegrab with a humanised, verified two-step: select the spell → confirm selected → short bounded reaction →
+     * re-validate the goat is still alive AND still in range from our actual position → click it. If it drifted out
+     * of range during the reaction, abort (never let it reach the movement system). Returns 1/0/-1 as above.
      */
+    private int telegrab(Rs2NpcModel goat) {
+        // Reuse an already-selected spell (e.g. left over from a prior abort) instead of re-casting (which toggles).
+        if (!Microbot.getClient().isWidgetSelected()) {
+            if (!Rs2Magic.cast(Rs2Spells.TELEKINETIC_GRAB)) return -1;
+            if (!sleepUntil(() -> Microbot.getClient().isWidgetSelected(), 1500)) return -1;
+        }
+        sleep(60, 260);   // bounded human reaction between selecting the spell and clicking the target
+        Boolean ok = Microbot.getClientThread().invoke((Supplier<Boolean>) () -> {
+            WorldPoint g = goat.getWorldLocation();
+            WorldPoint p = Rs2Player.getWorldLocation();
+            if (goat.getName() == null || g == null || p == null || p.distanceTo(g) > MAX_GRAB_DISTANCE) return false;
+            if (!Rs2Camera.isTileOnScreen(goat.getLocalLocation())) Rs2Camera.turnTo(goat.getLocalLocation());
+            return true;
+        });
+        if (ok == null || !ok) return 0;   // goat moved/despawned during the reaction → abort, keep spell selected
+        return Rs2Npc.interact(goat) ? 1 : -1;
+    }
+
     private Rs2NpcModel selectGoat() {
         diagSeen = 0;
-        diagEligible = 0;
-        WorldPoint me = Rs2Player.getWorldLocation();
+        validGoats = 0;
+        WorldPoint me = pos();
         if (me == null) return null;
-        double dx = PIT_CENTER.getX() - me.getX(), dy = PIT_CENTER.getY() - me.getY();   // us → pit heading
+        double dx = PIT_CENTER.getX() - me.getX(), dy = PIT_CENTER.getY() - me.getY();
         double dlen = Math.hypot(dx, dy);
-        if (dlen < 1) return null;   // standing on the pit — nothing is "across"
+        if (dlen < 1) return null;
         long now = System.currentTimeMillis();
         recentGrabs.values().removeIf(t -> now - t > GRAB_COOLDOWN_MS);
 
@@ -315,17 +337,17 @@ public class IrkedGoatkillerScript extends Script {
                 .collect(Collectors.toList());
         List<Rs2NpcModel> eligible = seen.stream()
                 .filter(g -> me.distanceTo(g.getWorldLocation()) <= MAX_GRAB_DISTANCE)   // in range → no walk
-                .filter(g -> !g.isMoving())                                              // already being lured
+                .filter(g -> !g.isMoving())
                 .filter(g -> !recentGrabs.containsKey(g.getIndex()))
                 .filter(g -> !claimedByOther(g))
-                .filter(g -> across(g.getWorldLocation(), dx, dy, dlen) > ACROSS_MIN)     // opposite side of the pit
+                .filter(g -> across(g.getWorldLocation(), dx, dy, dlen) > ACROSS_MIN)     // opposite side
                 .collect(Collectors.toList());
         Rs2NpcModel chosen = eligible.stream()
                 .max(Comparator.comparingDouble(g -> across(g.getWorldLocation(), dx, dy, dlen)))
                 .orElse(null);
 
         diagSeen = seen.size();
-        diagEligible = eligible.size();
+        validGoats = eligible.size();
         if (chosen != null) {
             diagScore = across(chosen.getWorldLocation(), dx, dy, dlen);
             diagDist = me.distanceTo(chosen.getWorldLocation());
@@ -333,7 +355,6 @@ public class IrkedGoatkillerScript extends Script {
         return chosen;
     }
 
-    /** Cosine of the angle between (pit→goat) and the (us→pit) heading: ~1 = dead across, ≤0 = same side as us. */
     private static double across(WorldPoint goat, double dx, double dy, double dlen) {
         double vx = goat.getX() - PIT_CENTER.getX(), vy = goat.getY() - PIT_CENTER.getY();
         double vlen = Math.hypot(vx, vy);
@@ -352,11 +373,11 @@ public class IrkedGoatkillerScript extends Script {
         }, false).findAny().isPresent();
     }
 
-    // --- CLEAR: harvest, wait for genuine empty, drop horns per config ---
+    // --- CLEAR ---
 
     private void clearPit() {
         if (!ensureAtTile()) return;
-        if (System.currentTimeMillis() - lastLineMs < 1200) return;   // small settle
+        if (System.currentTimeMillis() - lastLineMs < 1200) return;
         if (!Rs2GameObject.interact(GOAT_PIT_ID, "Clear")) {
             log.info("[goat] clear click failed — retrying");
             sleep(300, 600);
@@ -365,8 +386,6 @@ public class IrkedGoatkillerScript extends Script {
         log.info("[goat] clear pit (grabsSinceLine={} full={})", grabsSinceLine, fullSignaled);
         long start = System.currentTimeMillis();
         sleep(1200, 1800);
-        // Harvest is one goat/tick; horns land in the inventory (fur goes to the pouch). Wait for genuine empty:
-        // the pit action reverts to Line, OR horns stop arriving and the player is idle.
         long deadline = System.currentTimeMillis() + 20000;
         int lastHorn = Rs2Inventory.count(GOAT_HORN), stable = 0;
         String why = "timeout";
@@ -379,7 +398,7 @@ public class IrkedGoatkillerScript extends Script {
         }
         sleep(500, 900);
         clears.incrementAndGet();
-        spikesBroken = true;   // clearing always breaks the spikes → next tick re-lines
+        spikesBroken = true;
         fullSignaled = false;
         grabsSinceLine = 0;
         recentGrabs.clear();
@@ -389,37 +408,66 @@ public class IrkedGoatkillerScript extends Script {
                 Rs2Inventory.count(GOAT_HORN), Rs2Inventory.count(GOAT_FUR));
     }
 
-    /** Drop horns to free room for more fur. One drop → short human beat → verify count fell. */
-    private void dropHorns() {
-        if (!config.dropGoatHorn()) {
-            // Config says keep horns, but the inventory is full of them with no fur room → nothing to do but bank.
-            setTask(Task.BANKING);
-            bankFur();
-            return;
-        }
-        int had = Rs2Inventory.count(GOAT_HORN);
-        log.info("[goat] inventory full — dropping {} horns to make room", had);
-        int guard = 40;
-        while (Rs2Inventory.count(GOAT_HORN) > 0 && guard-- > 0) {
-            int before = Rs2Inventory.count(GOAT_HORN);
-            Rs2Inventory.drop(GOAT_HORN);
-            sleepUntil(() -> Rs2Inventory.count(GOAT_HORN) < before, 1500);   // one drop → wait → verify
-            if (ThreadLocalRandom.current().nextInt(100) < 15) sleep(650, 1500); else sleep(160, 460);
-        }
-        progress();
-        log.info("[goat] dropped horns {} -> {}", had, Rs2Inventory.count(GOAT_HORN));
+    // --- INVENTORY POLICY ---
+
+    /** Item names that are disposable right now, per config (horns unless kept, fur if drop-fur). */
+    private List<String> disposableNames() {
+        List<String> d = new ArrayList<>();
+        if (!config.keepGoatHorns()) d.add(GOAT_HORN);
+        if (config.dropGoatFur()) d.add(GOAT_FUR);
+        return d;
     }
 
-    // --- BANK: only when fur genuinely can't be stored ---
+    /** Items we must keep for "Drop everything": required supplies + config-protected loot. */
+    private String[] protectedNames() {
+        List<String> p = new ArrayList<>();
+        p.add(WOODEN_SPIKES);
+        p.add("Law rune");
+        p.add("Air rune");
+        p.add("fur pouch");   // contains-match keeps every pouch variant
+        if (config.keepGoatHorns()) p.add(GOAT_HORN);
+        if (!config.dropGoatFur()) p.add(GOAT_FUR);
+        return p.toArray(new String[0]);
+    }
+
+    private boolean hasDisposables() {
+        for (String n : disposableNames()) {
+            if (Rs2Inventory.hasItem(n)) return true;
+        }
+        return false;
+    }
+
+    /** Bulk-drop disposables to free room (fast, one verify). Fur always fills the pouch first, so any inv fur here
+     *  means the pouch is already full. Never drops required supplies or config-protected loot. */
+    private void makeRoom() {
+        int hornsBefore = Rs2Inventory.count(GOAT_HORN);
+        int furBefore = Rs2Inventory.count(GOAT_FUR);
+        log.info("[goat] inventory full — making room (dropEverything={} keepHorns={} dropFur={})",
+                config.dropEverything(), config.keepGoatHorns(), config.dropGoatFur());
+        if (config.dropEverything()) {
+            Rs2Inventory.dropAllExcept(protectedNames());
+        } else {
+            Rs2Inventory.dropAll(disposableNames().toArray(new String[0]));
+        }
+        sleepUntil(() -> !Rs2Inventory.isFull(), 4000);
+        int hornsGone = Math.max(0, hornsBefore - Rs2Inventory.count(GOAT_HORN));
+        int furGone = Math.max(0, furBefore - Rs2Inventory.count(GOAT_FUR));
+        if (hornsGone > 0) hornsDropped.addAndGet(hornsGone);
+        if (furGone > 0) furDropped.addAndGet(furGone);
+        progress();
+        log.info("[goat] dropped horns={} fur={} | invFull now={}", hornsGone, furGone, Rs2Inventory.isFull());
+    }
+
+    // --- BANK ---
 
     private void bankFur() {
-        WorldPoint me = Rs2Player.getWorldLocation();
+        WorldPoint me = pos();
         if (me == null) return;
         if (me.distanceTo(BANK_TILE) > 4) {
-            if (config.useAgilityShortcut()) tryCrossStone();
-            walkStep(BANK_TILE, 3);
+            walkStep(BANK_TILE, 3);   // handles agility crossing + fast/web routing
             return;
         }
+        agilityDisabledThisTrip = false;   // arrived at bank
         if (!Rs2Bank.isOpen()) {
             if (System.currentTimeMillis() - lastBankMs > BANK_THROTTLE_MS) {
                 lastBankMs = System.currentTimeMillis();
@@ -444,17 +492,59 @@ public class IrkedGoatkillerScript extends Script {
         log.info("[goat] banked | invFurBefore={} fursBankedTotal={}", before, fursBanked.get());
         sleep(400, 700);
         Rs2Bank.closeBank();
-        // Return is handled next tick: lining/hunting needs our tile, which walks us back.
+        agilityDisabledThisTrip = false;   // fresh trip home
     }
 
-    /** Best-effort agility assist: only Cross when the route already put us next to a stone anchor. */
-    private void tryCrossStone() {
-        WorldPoint me = Rs2Player.getWorldLocation();
-        if (me == null) return;
-        if (me.distanceTo(STONE_NORTH) <= 1 || me.distanceTo(STONE_SOUTH) <= 1) {
-            log.info("[goat] agility: crossing stepping stone");
-            if (Rs2GameObject.interact(STEPPING_STONE_ID, "Cross")) sleep(1500, 2500);
+    // --- movement ---
+
+    /** Short local hops use fast canvas walking; only far cross-region trips use the web-walker (via the agility
+     *  stepping stone when enabled). Tracks the route for the overlay. */
+    private void walkStep(WorldPoint target, int distance) {
+        WorldPoint me = pos();
+        if (me == null) {
+            route = "WEBWALKER";
+            Rs2Walker.walkTo(target, distance);
+            return;
         }
+        if (me.distanceTo(target) <= LOCAL_WALK_TILES) {
+            route = "FAST";
+            Rs2Walker.walkFastCanvas(target);
+            return;
+        }
+        if (crossGapIfNeeded(target)) return;   // agility leg this tick
+        route = "WEBWALKER";
+        Rs2Walker.walkTo(target, distance);
+    }
+
+    /** If the agility stone lies between us and the destination (opposite sides of the gap), cross it. */
+    private boolean crossGapIfNeeded(WorldPoint dest) {
+        if (!config.useAgilityShortcut() || agilityDisabledThisTrip) return false;
+        WorldPoint me = pos();
+        if (me == null) return false;
+        boolean meSouth = me.getY() < GAP_Y, destSouth = dest.getY() < GAP_Y;
+        if (meSouth == destSouth) return false;   // same side — no crossing needed
+        WorldPoint anchor = meSouth ? STONE_SOUTH : STONE_NORTH;
+        route = "AGILITY";
+        if (me.distanceTo(anchor) > 1) {
+            if (me.distanceTo(anchor) <= LOCAL_WALK_TILES) Rs2Walker.walkFastCanvas(anchor);
+            else Rs2Walker.walkTo(anchor, 0);
+            return true;
+        }
+        log.info("[goat] agility: crossing stepping stone ({})", meSouth ? "S→N" : "N→S");
+        if (Rs2GameObject.interact(STEPPING_STONE_ID, "Cross")) {
+            boolean crossed = sleepUntil(() -> {
+                WorldPoint p = pos();
+                return p != null && (p.getY() < GAP_Y) != meSouth;
+            }, 6000);
+            if (crossed) {
+                progress();
+                return true;
+            }
+        }
+        log.info("[goat] agility: cross failed — falling back to web-walker for this trip");
+        agilityDisabledThisTrip = true;
+        recoveries.incrementAndGet();
+        return false;
     }
 
     // --- helpers ---
@@ -469,17 +559,19 @@ public class IrkedGoatkillerScript extends Script {
         }
     }
 
-    /** True when we're on (or within 1 tile of) our standing tile; otherwise walk back (never toward a goat). */
     private boolean ensureAtTile() {
-        WorldPoint me = Rs2Player.getWorldLocation();
+        WorldPoint me = pos();
         if (me == null) return false;
-        if (me.distanceTo(standTile) <= 1) return true;   // range/side use the real position, so 1 tile is fine
+        if (me.distanceTo(standTile) <= 1) {
+            agilityDisabledThisTrip = false;   // home again
+            return true;
+        }
         walkStep(standTile, 0);
         return false;
     }
 
-    private void walkStep(WorldPoint target, int distance) {
-        Rs2Walker.walkTo(target, distance);
+    private WorldPoint pos() {
+        return Rs2Player.getWorldLocation();
     }
 
     private String openPouchName() {
@@ -508,7 +600,6 @@ public class IrkedGoatkillerScript extends Script {
         lastProgressMs = System.currentTimeMillis();
     }
 
-    /** Anti-stuck: re-anchor on a soft stall, stop with a reason on a hard stall. */
     private boolean watchdogTripped() {
         long idle = System.currentTimeMillis() - lastProgressMs;
         if (idle > STUCK_HARD_MS) {
@@ -517,6 +608,7 @@ public class IrkedGoatkillerScript extends Script {
         }
         if (idle > STUCK_SOFT_MS && System.currentTimeMillis() - lastSoftWarnMs > 15000) {
             lastSoftWarnMs = System.currentTimeMillis();
+            recoveries.incrementAndGet();
             log.info("[goat] WATCHDOG soft stall {}s in {} — re-evaluating (pit={} bankAttempts={})",
                     idle / 1000, task, pit, bankAttempts);
         }
@@ -536,8 +628,8 @@ public class IrkedGoatkillerScript extends Script {
 
     public void shutdown() {
         long secs = (System.currentTimeMillis() - startMs) / 1000;
-        log.info("[goat] shutdown | runtime={}s grabs={} clears={} fursBanked={} task={} stopReason='{}'",
-                secs, grabs.get(), clears.get(), fursBanked.get(), task, stopReason);
+        log.info("[goat] shutdown | runtime={}s grabs={} clears={} fursBanked={} hornsDropped={} task={} stop='{}'",
+                secs, grabs.get(), clears.get(), fursBanked.get(), hornsDropped.get(), task, stopReason);
         super.shutdown();
     }
 }

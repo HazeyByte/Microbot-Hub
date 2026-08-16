@@ -29,7 +29,7 @@ import javax.inject.Inject;
 )
 @Slf4j
 public class IrkedGoatkillerPlugin extends Plugin {
-    public static final String version = "1.0.1";
+    public static final String version = "1.1.0";
 
     @Inject
     private IrkedGoatkillerConfig config;

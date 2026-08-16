@@ -7,7 +7,7 @@ import net.runelite.client.config.ConfigSection;
 
 /**
  * irkedGoatkiller config. The activity has unlimited on-site spikes; the real choices are the fur-pouch
- * tier (drives storage capacity), which side of the pit to stand on, and loot/travel preferences.
+ * tier (storage), which side of the pit to stand on, and how loot/inventory space is managed.
  */
 @ConfigGroup(IrkedGoatkillerConfig.GROUP)
 public interface IrkedGoatkillerConfig extends Config {
@@ -44,17 +44,35 @@ public interface IrkedGoatkillerConfig extends Config {
         SOUTH, EAST, NORTH, WEST
     }
 
-    @ConfigSection(name = "Setup", description = "Core setup", position = 0)
+    @ConfigSection(
+            name = "Setup (read me)",
+            description = "How to start the plugin",
+            position = 0
+    )
     String setupSection = "setup";
 
-    @ConfigSection(name = "Loot & travel", description = "Loot and banking behaviour", position = 1)
+    @ConfigSection(name = "Inventory & loot", description = "How space is managed", position = 1)
     String lootSection = "loot";
+
+    @ConfigItem(
+            keyName = "instructions",
+            name = "Before you start",
+            description = "Stand on a supported Goat Pit tile • have Telegrab + law/air runes (or air staff) • carry your "
+                    + "fur pouch (open) • pick your pouch and side below. The bot stays on your side and Telegrabs goats "
+                    + "from the opposite side, fills the pouch first, drops horns to make room, empties the pit before "
+                    + "re-lining, and only banks when fur can't be stored.",
+            position = 0,
+            section = setupSection
+    )
+    default boolean instructions() {
+        return false;
+    }
 
     @ConfigItem(
             keyName = "furPouch",
             name = "Fur pouch",
             description = "Which fur pouch you're carrying (open). Fur fills the pouch first, then the inventory.",
-            position = 0,
+            position = 1,
             section = setupSection
     )
     default FurPouch furPouch() {
@@ -65,7 +83,7 @@ public interface IrkedGoatkillerConfig extends Config {
             keyName = "standSide",
             name = "Stand side",
             description = "Which side of the pit to stand on. The bot stays put and only grabs goats on the opposite side.",
-            position = 1,
+            position = 2,
             section = setupSection
     )
     default StandSide standSide() {
@@ -73,21 +91,47 @@ public interface IrkedGoatkillerConfig extends Config {
     }
 
     @ConfigItem(
-            keyName = "dropGoatHorn",
-            name = "Drop goat horns",
-            description = "Drop Goat horns (item 9735) to free inventory space for more fur. Fur is never dropped.",
+            keyName = "keepGoatHorns",
+            name = "Keep goat horns",
+            description = "ON: horns are protected and never dropped (you'll bank sooner). OFF: horns are junk and are "
+                    + "dropped to make room for more fur.",
             position = 0,
             section = lootSection
     )
-    default boolean dropGoatHorn() {
-        return true;
+    default boolean keepGoatHorns() {
+        return false;
+    }
+
+    @ConfigItem(
+            keyName = "dropGoatFur",
+            name = "Drop goat fur",
+            description = "ON: goat fur becomes disposable — dropped to keep hunting without banking (XP only). "
+                    + "The pouch still fills first. OFF (recommended): fur is kept and banked.",
+            position = 1,
+            section = lootSection
+    )
+    default boolean dropGoatFur() {
+        return false;
+    }
+
+    @ConfigItem(
+            keyName = "dropEverything",
+            name = "Drop everything",
+            description = "ON: to make room, drop ALL non-essential items (still protects runes, spikes, the fur pouch, "
+                    + "and anything protected by the options above). Only enable if you understand what gets discarded.",
+            position = 2,
+            section = lootSection
+    )
+    default boolean dropEverything() {
+        return false;
     }
 
     @ConfigItem(
             keyName = "useAgilityShortcut",
             name = "Use agility shortcut",
-            description = "Use the Slippery basalt stepping stone when travelling to/from the bank. Falls back to the normal route on any failure.",
-            position = 1,
+            description = "Cross the Slippery basalt stepping stone when travelling to/from the bank. Falls back to the "
+                    + "normal route on any failure.",
+            position = 3,
             section = lootSection
     )
     default boolean useAgilityShortcut() {
