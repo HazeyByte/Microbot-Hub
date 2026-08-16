@@ -32,11 +32,14 @@ public class IrkedGoatkillerOverlay extends OverlayPanel {
                     .text("irkedGoatkiller")
                     .color(Color.ORANGE)
                     .build());
-            line("State", script.state);
+            line("Task", script.task.toString());
             line("Grabs", Integer.toString(script.grabs.get()));
             line("Clears", Integer.toString(script.clears.get()));
             line("Furs banked", Integer.toString(script.fursBanked.get()));
             line("Runtime", runtime());
+            if (!script.stopReason.isEmpty()) {
+                line("Stopped", script.stopReason);
+            }
         } catch (Exception ex) {
             Microbot.logStackTrace(getClass().getSimpleName(), ex);
         }
