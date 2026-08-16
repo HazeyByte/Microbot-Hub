@@ -69,9 +69,12 @@ public class IrkedGoatkillerScript extends Script {
 
     private volatile PitState pit = PitState.EMPTY;
     private volatile boolean fullSignaled;               // chat: "the pit is now filled with goats"
+    private volatile boolean spikesBroken;               // chat/clear: pit needs re-lining before it holds goats
     private volatile int lastChatId = Integer.MIN_VALUE;
     private volatile boolean chatInit;
     private int grabsSinceLine;
+    private long lastTakeMs;   // throttle Take clicks on the spikes supply so we grab exactly one
+    private long lastLineMs;   // throttle Line clicks on the pit
 
     // Stats for the overlay.
     final AtomicInteger grabs = new AtomicInteger();
@@ -88,10 +91,14 @@ public class IrkedGoatkillerScript extends Script {
             try {
                 if (!Microbot.isLoggedIn() || !super.run()) return;
 
-                // The pit object is the source of truth; chat only flags "full".
+                // Chat is authoritative for the transitions the game announces (lined / filled / spikes broken);
+                // the pit object is a helpful assist but its morphing action reads unreliably, so it can't be
+                // trusted alone. Read the object first, let chat correct it, then hard-force a re-line if the
+                // spikes are known-broken — that's the recovery for "you need to replace the spikes".
                 PitState live = Microbot.getClientThread().invoke(this::readPitState);
                 if (live != null) pit = live;
                 Microbot.getClientThread().invoke(this::pollChat);
+                if (spikesBroken) pit = PitState.EMPTY;
 
                 boolean full = pit == PitState.GOATS && (fullSignaled || grabsSinceLine >= MAX_PIT_CAPACITY);
 
@@ -130,7 +137,12 @@ public class IrkedGoatkillerScript extends Script {
         return null;
     }
 
-    /** Runs on the client thread. Only watches for the "pit is full" line. */
+    /**
+     * Client thread. The game announces every state change we care about, so chat drives the FSM:
+     *   "you line the pit…"          → freshly SPIKED, start a new fill
+     *   "pit is now filled with goats" → FULL, go clear it
+     *   "…replace the spikes…"        → spikes broken, must re-line (recovery if the object read missed it)
+     */
     private Boolean pollChat() {
         IterableHashTable<MessageNode> msgs = Microbot.getClient().getMessages();
         if (msgs == null) return Boolean.TRUE;
@@ -143,8 +155,19 @@ public class IrkedGoatkillerScript extends Script {
             if (t != ChatMessageType.GAMEMESSAGE && t != ChatMessageType.SPAM && t != ChatMessageType.MESBOX) {
                 continue;
             }
-            if (n.getValue().toLowerCase().contains("pit is now filled with goats")) {
+            String m = n.getValue().toLowerCase();
+            if (m.contains("pit is now filled with goats")) {
                 fullSignaled = true;
+                pit = PitState.GOATS;
+            } else if (m.contains("replace the spikes")) {
+                spikesBroken = true;
+                pit = PitState.EMPTY;
+            } else if (m.contains("you line the pit")) {
+                spikesBroken = false;
+                pit = PitState.SPIKED;
+                grabsSinceLine = 0;
+                fullSignaled = false;
+                recentGrabs.clear();
             }
         }
         lastChatId = newMax;
@@ -156,21 +179,26 @@ public class IrkedGoatkillerScript extends Script {
     private void ensureLined() {
         if (Rs2Inventory.count(WOODEN_SPIKES) < 1) {
             state = "getting spikes";
-            walkNear(SPIKES_TILE);
             WorldPoint me = Rs2Player.getWorldLocation();
-            if (me == null || me.distanceTo(SPIKES_TILE) > 2) return;   // still walking — don't click until we arrive
-            final int had = Rs2Inventory.count(WOODEN_SPIKES);
-            Rs2GameObject.interact(SPIKES_SUPPLY, "Take");
-            sleepUntil(() -> Rs2Inventory.count(WOODEN_SPIKES) > had, 3000);   // one spike is all a lining needs
+            if (me == null) return;
+            if (me.distanceTo(SPIKES_TILE) > 2) {           // walk right up to the supply before clicking
+                Rs2Walker.walkFastCanvas(SPIKES_TILE);
+                return;
+            }
+            // One spike is all a lining needs. Throttle so we click Take once and wait for it — not once per tick.
+            if (System.currentTimeMillis() - lastTakeMs > 2500) {
+                lastTakeMs = System.currentTimeMillis();
+                Rs2GameObject.interact(SPIKES_SUPPLY, "Take");
+                sleepUntil(() -> Rs2Inventory.count(WOODEN_SPIKES) >= 1, 2500);
+            }
             return;
         }
         walkNear(PIT_TILE);
-        Rs2GameObject.interact(GOAT_PIT, "Line");
-        // Fresh fill starting: reset the per-fill trackers once the pit actually spikes.
-        if (sleepUntil(() -> readPitStateSafe() == PitState.SPIKED, 3500)) {
-            grabsSinceLine = 0;
-            fullSignaled = false;
-            recentGrabs.clear();
+        // Click Line once and wait — the "you line the pit" chat (pollChat) flips us to SPIKED and resets the
+        // per-fill trackers. Throttle so we don't re-click every 600ms tick while the first Line resolves.
+        if (System.currentTimeMillis() - lastLineMs > 2500) {
+            lastLineMs = System.currentTimeMillis();
+            Rs2GameObject.interact(GOAT_PIT, "Line");
         }
     }
 
@@ -204,10 +232,18 @@ public class IrkedGoatkillerScript extends Script {
         humanPause();
     }
 
-    /** Client thread. Nearest idle, un-cooled, unclaimed goat on the far side of the pit. */
+    /**
+     * Client thread. Pick the idle, un-cooled, unclaimed goat that sits most directly across the pit from the
+     * player — pulling that one straight toward us crosses the pit cleanly and drops it in, instead of dragging
+     * a side-on goat around the rim (which wastes the cast and leaves it to be re-selected).
+     */
     private Rs2NpcModel selectGoat() {
         WorldPoint me = Rs2Player.getWorldLocation();
         if (me == null) return null;
+        WorldPoint pit = pitAnchor();
+        double dx = pit.getX() - me.getX(), dy = pit.getY() - me.getY();   // heading from us toward the pit
+        double dlen = Math.hypot(dx, dy);
+        if (dlen < 1) return null;   // standing on the pit — nothing is "across" from here
         long now = System.currentTimeMillis();
         recentGrabs.values().removeIf(t -> now - t > GRAB_COOLDOWN_MS);
         return Rs2Npc.getNpcs(GOAT)
@@ -216,16 +252,26 @@ public class IrkedGoatkillerScript extends Script {
                 .filter(g -> !g.isMoving())                     // already being lured
                 .filter(g -> !recentGrabs.containsKey(g.getIndex()))
                 .filter(g -> !claimedByOther(g))
-                .filter(g -> pitBetween(me, g.getWorldLocation()))
-                .min(Comparator.comparingInt(g -> g.getWorldLocation().distanceTo(me)))
+                .filter(g -> acrossPit(g.getWorldLocation(), pit, dx, dy, dlen) > 0.3)   // roughly opposite the pit
+                .max(Comparator.comparingDouble(g -> acrossPit(g.getWorldLocation(), pit, dx, dy, dlen)))
                 .orElse(null);
     }
 
-    /** True when the pit sits between the player and the goat — so the grab drags the goat across it. */
-    private static boolean pitBetween(WorldPoint me, WorldPoint goat) {
-        int ax = me.getX() - PIT_TILE.getX(), ay = me.getY() - PIT_TILE.getY();
-        int gx = goat.getX() - PIT_TILE.getX(), gy = goat.getY() - PIT_TILE.getY();
-        return (ax * gx + ay * gy) < 0;
+    /**
+     * How directly a goat sits across the pit from the player: cosine of the angle between (pit→goat) and the
+     * (player→pit) heading. ~1 = goat dead behind the pit (best pull), ~0 = beside it, negative = same side as us.
+     */
+    private static double acrossPit(WorldPoint goat, WorldPoint pit, double dx, double dy, double dlen) {
+        double vx = goat.getX() - pit.getX(), vy = goat.getY() - pit.getY();
+        double vlen = Math.hypot(vx, vy);
+        if (vlen < 0.5) return 0;   // goat basically on the pit
+        return (vx * dx + vy * dy) / (vlen * dlen);
+    }
+
+    /** Client thread. Live pit location (SW tile) so geometry tracks the real object, not a stale constant. */
+    private WorldPoint pitAnchor() {
+        GameObject pit = Rs2GameObject.getGameObject(GOAT_PIT);
+        return pit != null ? pit.getWorldLocation() : PIT_TILE;
     }
 
     /** Skip a goat another player has already engaged. Client thread. */
@@ -248,22 +294,40 @@ public class IrkedGoatkillerScript extends Script {
             sleep(300, 600);
             return;
         }
-        // Harvest runs one goat per tick over many ticks. Wait until the pit is genuinely emptied (its action
-        // reverts to Line / EMPTY) before touching anything — otherwise the FSM sees a transient GOATS state and
-        // telegrabs into an unspiked pit, and we'd drop horns mid-harvest before they're all collected.
+        // Harvest runs one goat per tick over many ticks; horns land in the inventory as it goes (fur goes to the
+        // pouch, invisible). Wait until horns stop arriving AND the player is idle before we touch anything — so we
+        // don't drop horns mid-harvest, and don't re-line before it's actually empty. Break early if the object
+        // read confirms EMPTY. Clearing ALWAYS breaks the spikes, so mark it: the next tick will re-line.
         sleep(1200, 1800);
-        sleepUntil(() -> readPitStateSafe() == PitState.EMPTY, 25000);
-        sleepUntil(() -> !Rs2Player.isAnimating() && !Rs2Player.isMoving(), 6000);
-        sleep(600, 1000);   // let the last harvested item land
+        long deadline = System.currentTimeMillis() + 20000;
+        int lastHorn = Rs2Inventory.count(GOAT_HORN), stable = 0;
+        while (System.currentTimeMillis() < deadline) {
+            if (readPitStateSafe() == PitState.EMPTY) break;
+            int cur = Rs2Inventory.count(GOAT_HORN);
+            if (cur != lastHorn) { lastHorn = cur; stable = 0; }
+            else if (++stable >= 5 && !Rs2Player.isAnimating() && !Rs2Player.isMoving()) break;   // ~3s settled
+            sleep(600);
+        }
+        sleep(500, 900);   // let the last harvested item land
         clears.incrementAndGet();
+        spikesBroken = true;
         fullSignaled = false;
         grabsSinceLine = 0;
         recentGrabs.clear();
         if (config.dropGoatHorn()) {
-            int guard = 30;
-            while (Rs2Inventory.count(GOAT_HORN) > 0 && guard-- > 0) {
-                Rs2Inventory.drop(GOAT_HORN);
-                sleep(200, 500);
+            dropHorns();
+        }
+    }
+
+    /** Drop the junk horns with a human cadence — an uneven beat, not a metronome, with the odd distracted pause. */
+    private void dropHorns() {
+        int guard = 40;
+        while (Rs2Inventory.count(GOAT_HORN) > 0 && guard-- > 0) {
+            Rs2Inventory.drop(GOAT_HORN);
+            if (ThreadLocalRandom.current().nextInt(100) < 15) {
+                sleep(650, 1500);   // glanced away mid-drop
+            } else {
+                sleep(160, 460);
             }
         }
     }
