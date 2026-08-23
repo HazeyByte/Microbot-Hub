@@ -29,7 +29,7 @@ import javax.inject.Inject;
 )
 @Slf4j
 public class IrkedGoatkillerPlugin extends Plugin {
-    public static final String version = "1.1.0";
+    public static final String version = "1.2.2";
 
     @Inject
     private IrkedGoatkillerConfig config;
@@ -45,11 +45,14 @@ public class IrkedGoatkillerPlugin extends Plugin {
     private OverlayManager overlayManager;
     @Inject
     private IrkedGoatkillerOverlay overlay;
+    @Inject
+    private IrkedGoatkillerSceneOverlay sceneOverlay;
 
     @Override
     protected void startUp() {
         if (overlayManager != null) {
             overlayManager.add(overlay);
+            overlayManager.add(sceneOverlay);
         }
         script.run(config);
     }
@@ -59,6 +62,7 @@ public class IrkedGoatkillerPlugin extends Plugin {
         script.shutdown();
         if (overlayManager != null) {
             overlayManager.remove(overlay);
+            overlayManager.remove(sceneOverlay);
         }
     }
 }
