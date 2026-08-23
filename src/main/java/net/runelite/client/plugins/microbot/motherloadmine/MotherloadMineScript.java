@@ -92,6 +92,7 @@ public class MotherloadMineScript extends Script
 
 	private boolean shouldEmptySack = false;
 	private boolean shouldRepairWaterwheel = false;
+	private boolean emptySackWorkflowActive = false;
 	private long idleSince = 0;
 	private int idleThreshold = 0;
 	private boolean pickedUpHammer = false;
@@ -110,7 +111,7 @@ public class MotherloadMineScript extends Script
     {
         log.info("Starting MotherloadMine script");
         initialize();
-        mainScheduledFuture = scheduledExecutorService.scheduleWithFixedDelay(this::executeTask, 0, 600, TimeUnit.MILLISECONDS);
+        mainScheduledFuture = scheduledExecutorService.scheduleWithFixedDelay(this::executeTaskSafely, 0, 600, TimeUnit.MILLISECONDS);
         return true;
     }
 
@@ -123,13 +124,27 @@ public class MotherloadMineScript extends Script
         lastLoggedStatus = null;
         shouldEmptySack = false;
 		shouldRepairWaterwheel = false;
+		emptySackWorkflowActive = false;
+    }
+
+    private void executeTaskSafely()
+    {
+        try
+        {
+            executeTask();
+        }
+        catch (Exception ex)
+        {
+            log.error("Unhandled error in MLM main loop; resetting runtime state", ex);
+            abortCurrentWorkflow();
+        }
     }
 
     private void executeTask()
     {
-        if (!super.run() || !Microbot.isLoggedIn())
+        if (!super.run() || !isWorkflowRunnable())
         {
-            resetMiningState(true);
+            abortCurrentWorkflow();
             return;
         }
 
@@ -163,7 +178,6 @@ public class MotherloadMineScript extends Script
                 break;
         }
     }
-
     private String[] SPEC_PICKAXES = {"dragon pickaxe", "crystal pickaxe", "infernal pickaxe"};
 
     private void handlePickaxeSpec() {
@@ -263,30 +277,87 @@ public class MotherloadMineScript extends Script
 
     private void emptySack()
 	{
-        log.info("Emptying sack workflow started");
-		ensureLowerFloor();
-
-		while ((Microbot.getVarbitValue(VarbitID.MOTHERLODE_SACK_TRANSMIT) > 0 || hasOreInInventory()) && isRunning())
+		if (!emptySackWorkflowActive)
 		{
-			if (hasOreInInventory())
-			{
-				useDepositBox();
-			}
-            else if (canDropPayDirt()) {
-                depositHopper();
-            }
-			else
-			{
-                rs2TileObjectCache.query().interact(ObjectID.MOTHERLODE_SACK);
-				sleepUntil(this::hasOreInInventory);
-			}
+			emptySackWorkflowActive = true;
+			log.info("Emptying sack workflow started");
 		}
 
+		if (!isWorkflowRunnable())
+		{
+			abortCurrentWorkflow();
+			return;
+		}
+
+		ensureLowerFloor();
+		if (!isWorkflowRunnable())
+		{
+			abortCurrentWorkflow();
+			return;
+		}
+
+		if (Microbot.getVarbitValue(VarbitID.MOTHERLODE_SACK_TRANSMIT) <= 0 && !hasOreInInventory())
+		{
+			completeEmptySackWorkflow();
+			return;
+		}
+
+		if (hasOreInInventory())
+		{
+			useDepositBox();
+			return;
+		}
+
+        if (canDropPayDirt())
+        {
+            depositHopper();
+            return;
+        }
+
+        rs2TileObjectCache.query().interact(ObjectID.MOTHERLODE_SACK);
+		sleepUntil(() -> !isWorkflowRunnable() || hasOreInInventory(), 10_000);
+	}
+
+	private void completeEmptySackWorkflow()
+	{
 		shouldEmptySack = false;
 		shouldRepairWaterwheel = false;
+		emptySackWorkflowActive = false;
 		Rs2Antiban.takeMicroBreakByChance();
 		status = MLMStatus.IDLE;
         log.info("Emptying sack workflow complete");
+	}
+
+	private boolean isWorkflowRunnable()
+	{
+		if (!Microbot.isLoggedIn() || Microbot.pauseAllScripts.get() || Thread.currentThread().isInterrupted())
+		{
+			return false;
+		}
+
+		try
+		{
+			return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+				var player = Microbot.getClient().getLocalPlayer();
+				return player != null && player.getWorldView() != null;
+			}).orElse(false);
+		}
+		catch (RuntimeException ex)
+		{
+			log.debug("Player state unavailable during MLM lifecycle transition", ex);
+			return false;
+		}
+	}
+
+	private void abortCurrentWorkflow()
+	{
+		resetMiningState(true);
+		status = MLMStatus.IDLE;
+		idleSince = 0;
+		shouldEmptySack = false;
+		shouldRepairWaterwheel = false;
+		emptySackWorkflowActive = false;
+		pickedUpHammer = false;
 	}
 
     private boolean hasOreInInventory()
