@@ -99,16 +99,31 @@ public class PrifddinasCourse implements AgilityCourseHandler
 		if (currentHealth < lastKnownHealth)
 		{
 			log.info("Health dropped from {}% to {}% - fall detected", lastKnownHealth, currentHealth);
-			WorldPoint playerLocation = getPlayerWorldLocation();
+			lastKnownHealth = currentHealth;
+
+			// Rs2Player.getWorldLocation() is instance-aware (see docs/PLUGIN_DEBUGGING_NOTES.md #2);
+			// the interface's default getPlayerWorldLocation() uses the raw client call, which can
+			// report a mirrored/stale position in the course's underground tunnel section.
+			WorldPoint playerLocation = Rs2Player.getWorldLocation();
 			log.info("Player location when fall detected: {}", playerLocation);
 
-			// walk to exact fall recovery point
-			log.info("Walking to exact fall recovery point: {}", fallRecoveryPoint);
+			// Failing an obstacle almost never displaces the player far from it - if a nearby
+			// obstacle is still reachable, retry it directly instead of invoking the full
+			// cross-map walker. Long-distance walkTo() calls from deep in the course (e.g. the
+			// underground tunnel section) have driven the walker into irrational teleport-based
+			// recovery routes (teleporting to Lumbridge and walking back across the map) because
+			// its teleport-selection cost model isn't aware this is a same-course recovery.
+			TileObject nextObstacle = getCurrentObstacle();
+			if (nextObstacle != null)
+			{
+				log.info("Nearby obstacle still reachable after fall (id={}) - retrying locally, no walk needed", nextObstacle.getId());
+				return true;
+			}
+
+			// No obstacle reachable nearby - genuinely lost, walk back to the course start.
+			log.info("No obstacle reachable nearby - walking to fall recovery point: {}", fallRecoveryPoint);
 			Rs2Walker.walkTo(fallRecoveryPoint, 0);
 			Microbot.log("Fell from agility course, walking back to start");
-
-			// update health tracking
-			lastKnownHealth = currentHealth;
 			return true;
 		}
 
