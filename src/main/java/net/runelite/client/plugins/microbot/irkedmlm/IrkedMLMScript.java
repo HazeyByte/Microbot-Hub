@@ -96,6 +96,13 @@ public class IrkedMLMScript extends Script {
      */
     private int measuredSackCapacity = 0;
 
+    /**
+     * How close we must be to the recorded drop tile before looting. Mirrors the tolerance
+     * HopperSession resolves its hopper with: anchor on the expected point, act only within a tile or
+     * two of it, never sweep a wide radius.
+     */
+    private static final int PAYDIRT_PICKUP_TOLERANCE = 3;
+
     /** Pay-dirt dropped to make room for emptying the sack, so it can be reclaimed afterwards. */
     private final DroppedPayDirt droppedPayDirt = new DroppedPayDirt();
 
@@ -1267,7 +1274,17 @@ public class IrkedMLMScript extends Script {
 
         droppedPayDirt.beginCollecting(now);
 
-        if (!Rs2GroundItem.exists(ItemID.PAYDIRT, 12)) {
+        // Anchor to the tile we dropped on, the same shape HopperSession uses to tell the two
+        // same-id hoppers apart: walk to the expected point, then only act within a tight tolerance
+        // of it. A wide sweep would happily grab a stranger's pile — or ours from the wrong side of
+        // the chamber — and the drop put every one of our items on a single known tile.
+        if (here != null && pile != null && here.distanceTo(pile) > PAYDIRT_PICKUP_TOLERANCE) {
+            debug("[MLM] Walking to the dropped pay-dirt at {} ({} tiles)", pile, here.distanceTo(pile));
+            Rs2Walker.walkFastCanvas(pile);
+            return true;
+        }
+
+        if (!Rs2GroundItem.exists(ItemID.PAYDIRT, PAYDIRT_PICKUP_TOLERANCE)) {
             log.info("[MLM] Collected the dropped pay-dirt — depositing it before returning to mine");
             droppedPayDirt.clear();
             routeReclaimedPayDirt();
@@ -1280,7 +1297,7 @@ public class IrkedMLMScript extends Script {
             return false;
         }
 
-        if (Rs2GroundItem.loot(ItemID.PAYDIRT, 12)) {
+        if (Rs2GroundItem.loot(ItemID.PAYDIRT, PAYDIRT_PICKUP_TOLERANCE)) {
             humanPause(120, 340, true);
         } else {
             debug("[MLM] Pay-dirt pickup click did not register — retrying");
