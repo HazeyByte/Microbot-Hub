@@ -58,7 +58,7 @@ the deposit box, repairs the water-wheel struts, and tracks ores/nuggets/XP in a
 
 | Setting | What it does |
 |---------|--------------|
-| Sack Size | Standard (108) or Upgraded (189). Increases are auto-detected mid-run. |
+| Sack Size | Standard (108) or Upgraded (189). Corrected automatically either way — see *Notes*. |
 | Use Upstairs Hopper | Deposit at the upper hopper once you have unlocked it. |
 
 ### Repair
@@ -131,6 +131,15 @@ even on Active.
 
 - Nugget upgrades (bigger sack, upstairs access) are left to the player — the bot does not spend
   nuggets.
+- **Sack size corrects itself.** Setting *Upgraded* on an account that still has the 108 sack used to
+  wedge the deposit loop: the varbit caps at 108 while the bot believed 189, so "sack full" never
+  became true and it kept re-offering pay-dirt to the hopper. Now, if a wheel is turning and the
+  hopper still refuses an entire load, that refusal is treated as proof the sack is full and the real
+  capacity is recorded — so a wrong setting costs one rejected deposit, not a stuck run.
+- **Dropped pay-dirt is picked back up.** Emptying the sack needs free inventory slots, so a full load
+  of pay-dirt is dropped first. Once the sack is clear the pile is collected again before the bot
+  walks off. It is written off if it has been on the floor too long to still exist, if the inventory
+  has no room, or if the run has already moved away from the spot.
 - The overlay's **Nuggets** figure is what you have gained **this session**, counted as each batch
   lands in your inventory. It is correct under either deposit method, and nuggets you were already
   carrying when you started are not counted. It is deliberately not your total owned — your banked

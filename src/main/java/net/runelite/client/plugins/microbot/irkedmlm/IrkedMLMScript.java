@@ -36,6 +36,7 @@ import net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Gembag;
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
 import net.runelite.client.plugins.microbot.util.bank.enums.BankLocation;
+import net.runelite.client.plugins.microbot.util.grounditem.Rs2GroundItem;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2ItemModel;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
@@ -86,6 +87,17 @@ public class IrkedMLMScript extends Script {
     /** When the water first froze (both wheels broken; 0 = at least one wheel running). Used to stop
      *  indefinitely deferring repair to a player standing near the wheel who turns out to be idle. */
     private long brokenStrutsObservedSinceMs = 0L;
+
+    /**
+     * Sack capacity proven by the hopper refusing a deposit, or 0 while unknown. The configured size
+     * is only a claim: pick "Upgraded" on an account that still has the 108 sack and the varbit caps
+     * at 108 while maxSackSize says 189, so isSackFull() is never true and the deposit loop retries
+     * forever. A refusal measures the real ceiling, so we believe that over the config.
+     */
+    private int measuredSackCapacity = 0;
+
+    /** Pay-dirt dropped to make room for emptying the sack, so it can be reclaimed afterwards. */
+    private final DroppedPayDirt droppedPayDirt = new DroppedPayDirt();
 
     /** Shared "is somebody else already on the wheel, and how long do we leave them to it" policy. */
     private final MlmRepairEtiquette repairEtiquette = new MlmRepairEtiquette();
@@ -351,6 +363,8 @@ public class IrkedMLMScript extends Script {
         lastVarbitValue              = 0;
         lastVarbitReadMs             = 0L;
         brokenStrutsObservedSinceMs  = 0L;
+        measuredSackCapacity         = 0;
+        droppedPayDirt.clear();
         repairEtiquette.reset();
         startupSackChecked           = false;
         recoveryAttempts.set(0);
@@ -727,6 +741,23 @@ public class IrkedMLMScript extends Script {
             }
 
             // -------------------------------------------------------------------------
+            // PRIORITY 1.5 — reclaim pay-dirt dropped for the sack trip
+            // -------------------------------------------------------------------------
+            // The sack trip is finished (every session above is idle) and the slots it needed are free
+            // again, so go back for the pile rather than leaving several minutes of mining on the floor.
+            // Deliberately after the session block: collecting mid-trip would refill the very slots the
+            // sack emptying needs.
+            if (droppedPayDirt.isPending(System.currentTimeMillis())
+                    && status != MLMStatus.EMPTY_SACK
+                    && status != MLMStatus.RECOVERY
+                    && sackSession.isIdle() && hopperSession.isIdle() && repairSession.isIdle()) {
+                if (collectDroppedPayDirt()) {
+                    updateSnapshot();
+                    return;
+                }
+            }
+
+            // -------------------------------------------------------------------------
             // PRIORITY 2 — dispatch
             // -------------------------------------------------------------------------
             dispatchByStatus();
@@ -1098,7 +1129,38 @@ public class IrkedMLMScript extends Script {
                 setStatus(MLMStatus.WAITING_FOR_REPAIR);
                 return;
             }
-            if (++hopperDepositRetries >= HopperSession.MAX_DEPOSIT_RETRIES) {
+            hopperDepositRetries++;
+
+            // The hopper refuses everything for exactly two reasons: the water is frozen (both gates
+            // above) or the sack is full. A wheel is turning, so it is the sack — regardless of what
+            // the varbit or the configured sack size say. One retry first, in case the click simply
+            // missed; a second identical refusal is proof.
+            //
+            // This is what was spamming the hopper: with the sack genuinely full but maxSackSize
+            // overstated, isSackFull() stayed false, so the "sack full → empty it" branch never ran and
+            // this path retried to the recovery cap, recovered (which resets the counter), and came
+            // straight back for another burst.
+            if (tickRunningWheelCount > 0 && hopperDepositRetries > 1) {
+                int measured = currentSackCount();
+                if (measured > 0 && measured < maxSackSize) {
+                    log.warn("[MLM] Hopper refused all {} pay-dirt with a wheel running at sack {}/{} — "
+                                    + "real capacity is {}, correcting (configured sack size was wrong)",
+                            initial, measured, maxSackSize, measured);
+                    measuredSackCapacity = measured;
+                    maxSackSize = measured;
+                } else {
+                    log.info("[MLM] Hopper refused all {} pay-dirt with a wheel running — sack is full", initial);
+                }
+                setSackIsFull(true);
+                sackState.clearProjection();
+                if (!hasOreInInventory() && !hasGemsInInventory()) {
+                    dropAllPayDirt();
+                }
+                setStatus(MLMStatus.EMPTY_SACK);
+                return;
+            }
+
+            if (hopperDepositRetries >= HopperSession.MAX_DEPOSIT_RETRIES) {
                 log.error("[MLM] Deposit rejected {} times (wheel not frozen / repairs off) — entering recovery", HopperSession.MAX_DEPOSIT_RETRIES);
                 setStatus(MLMStatus.RECOVERY);
                 return;
@@ -1155,6 +1217,53 @@ public class IrkedMLMScript extends Script {
         }
 
         log.info("[MLM] Pay-dirt drop complete, dropped={}, remaining: {}", dropped, payDirtCount());
+
+        if (dropped > 0) {
+            // Remember the pile so it can be picked back up once the sack is clear — that is several
+            // minutes of mining lying on the floor, and a player would never just walk off from it.
+            droppedPayDirt.note(Rs2Player.getWorldLocation(), dropped, System.currentTimeMillis());
+        }
+    }
+
+    /**
+     * Collects pay-dirt we dropped to free slots for emptying the sack.
+     *
+     * @return {@code true} while still collecting (the caller should not move on yet)
+     */
+    private boolean collectDroppedPayDirt() {
+        long now = System.currentTimeMillis();
+        WorldPoint here = Rs2Player.getWorldLocation();
+        WorldPoint pile = droppedPayDirt.getWhere();
+        boolean nearPile = here != null && pile != null && here.distanceTo(pile) <= 12;
+
+        if (!droppedPayDirt.shouldCollect(now, Rs2Inventory.emptySlotCount(), nearPile)) {
+            if (droppedPayDirt.isPending(now) && !nearPile) {
+                debug("[MLM] Dropped pay-dirt is out of range now — writing it off");
+            }
+            droppedPayDirt.clear();
+            return false;
+        }
+
+        droppedPayDirt.beginCollecting(now);
+
+        if (!Rs2GroundItem.exists(ItemID.PAYDIRT, 12)) {
+            log.info("[MLM] No dropped pay-dirt left on the ground — collection done");
+            droppedPayDirt.clear();
+            return false;
+        }
+        if (Rs2Inventory.emptySlotCount() <= 0) {
+            log.info("[MLM] Inventory full while collecting dropped pay-dirt — stopping");
+            droppedPayDirt.clear();
+            return false;
+        }
+
+        if (Rs2GroundItem.loot(ItemID.PAYDIRT, 12)) {
+            humanPause(120, 340, true);
+        } else {
+            debug("[MLM] Pay-dirt pickup click did not register — retrying");
+            sleep(Rs2Random.between(250, 600));
+        }
+        return true;
     }
 
     // =========================================================================
@@ -1792,7 +1901,18 @@ public class IrkedMLMScript extends Script {
         maxSackSize = (config.sackSize() == MLMSackSize.UPGRADED) ? SACK_LARGE_SIZE : SACK_SIZE;
         int live = currentSackCount();
         if (live > SACK_SIZE) {
-            maxSackSize = SACK_LARGE_SIZE;
+            maxSackSize = SACK_LARGE_SIZE; // config understated it — the varbit is proof
+        }
+        if (measuredSackCapacity > 0) {
+            if (live > measuredSackCapacity) {
+                // Holding more than we thought fits: the sack was upgraded mid-run, so the old
+                // measurement is stale. Drop it and go back to trusting the varbit/config.
+                log.info("[MLM] Sack now holds {} > measured capacity {} — clearing the measurement",
+                        live, measuredSackCapacity);
+                measuredSackCapacity = 0;
+            } else if (measuredSackCapacity < maxSackSize) {
+                maxSackSize = measuredSackCapacity;
+            }
         }
     }
 
