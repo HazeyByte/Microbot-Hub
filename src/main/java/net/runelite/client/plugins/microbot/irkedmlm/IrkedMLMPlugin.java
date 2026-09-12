@@ -30,7 +30,7 @@ import net.runelite.client.ui.overlay.OverlayManager;
 @Slf4j
 public class IrkedMLMPlugin extends Plugin {
 
-    public static final String version = "1.0.5";
+    public static final String version = "1.0.1";
 
     private static final String CHAT_SACK_WILL_BE_FULL = "your sack will be full";
     private static final String CHAT_SACK_IS_FULL = "your sack is full";
