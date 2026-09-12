@@ -260,6 +260,23 @@ public abstract class Session {
         ladderQuietMs = Rs2Random.between(LADDER_QUIET_MIN_MS, LADDER_QUIET_MAX_MS);
     }
 
+    /**
+     * Pulls the camera back one step, the way a player does when what they want to click is too close
+     * to frame. Bounded by {@link #MIN_ZOOM} so we never zoom out to a uselessly tiny scene, and
+     * randomised so it is not a fixed keystroke every time.
+     */
+    private void zoomOutAStep() {
+        int current = Rs2Camera.getZoom();
+        if (current <= MIN_ZOOM) {
+            log.debug("[Session] Already at minimum zoom — cannot pull back further");
+            return;
+        }
+        int target = Math.max(MIN_ZOOM,
+                current - Rs2Random.between(ZOOM_OUT_STEP_MIN, ZOOM_OUT_STEP_MAX));
+        log.info("[Session] Target will not frame at zoom {} — pulling back to {}", current, target);
+        Rs2Camera.setZoom(target);
+    }
+
     private void clearLadderClick() {
         ladderClickMs = 0L;
         ladderProgressMs = 0L;
@@ -358,6 +375,15 @@ public abstract class Session {
     /** How many swings we have already tried for the current target. Reset on a successful check. */
     private int panelRevealSwings = 0;
 
+    /** Consecutive camera turns that failed to produce a clickable box for the current target. */
+    private int clickboxTurnAttempts = 0;
+    /** Turns to try before concluding the problem is zoom rather than angle. */
+    private static final int MAX_CLICKBOX_TURNS = 2;
+    /** How far to pull the camera back per step, and the closest we will ever leave it. */
+    private static final int ZOOM_OUT_STEP_MIN = 90;
+    private static final int ZOOM_OUT_STEP_MAX = 170;
+    private static final int MIN_ZOOM = 200;
+
     /**
      * A pre-click sanity check {@link Rs2Camera#isTileOnScreen} does not give: isTileOnScreen only
      * confirms the tile roughly faces the camera (turnTo's tolerance is ~40°), so a clickbox can still
@@ -439,11 +465,24 @@ public abstract class Session {
         }
         if (hasSafeClickbox(model)) {
             panelRevealSwings = 0;
+            clickboxTurnAttempts = 0;
             return true;
         }
         if (openPanelBounds() == null) {
-            log.debug("[Session] Clickbox clipped by canvas edge — turning camera");
-            Rs2Camera.turnTo(model);
+            // Edge-clipped rather than covered. Turning centres the object, which makes it fill MORE
+            // of the screen, not less — so if the box is clipped because the camera is zoomed too far
+            // in, no amount of turning can ever satisfy the check and the session spins until it
+            // stalls. That is the live "went down the ladder but never clicked the strut" case, and it
+            // cleared the moment the screen was zoomed out by hand. So: turn a couple of times, and if
+            // that has not worked, pull the camera back instead.
+            if (++clickboxTurnAttempts <= MAX_CLICKBOX_TURNS) {
+                log.debug("[Session] Clickbox clipped by canvas edge — turning camera (attempt {})",
+                        clickboxTurnAttempts);
+                Rs2Camera.turnTo(model);
+                return false;
+            }
+            clickboxTurnAttempts = 0;
+            zoomOutAStep();
             return false;
         }
         // Panel is covering the target. Swing the camera off dead centre so the object sits beside the
@@ -715,6 +754,7 @@ public abstract class Session {
         // that has already gone to the server. Clearing it on a mid-climb session handover is exactly
         // how the second click got through.
         panelRevealSwings = 0;
+        clickboxTurnAttempts = 0;
     }
 
     /**

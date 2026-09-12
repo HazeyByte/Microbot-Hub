@@ -497,9 +497,9 @@ public class RepairSession extends Session {
         // Ensure the strut is actually on-screen before clicking. Otherwise its clickbox is off-canvas
         // and Microbot.doInvoke falls back to clicking the (1,1) corner instead of gliding the natural
         // mouse onto the strut. Turn the camera and retry next tick (mirrors MiningSession's vein click).
-        // hasSafeClickbox catches turnTo's 40° tolerance leaving the box still clipped by an edge.
-        if (!Rs2Camera.isTileOnScreen(target.getLocalLocation()) || !hasSafeClickbox(target)) {
-            Rs2Camera.turnTo(target);
+        // ensureClickable turns, and pulls the camera back when turning cannot frame it — a strut you
+        // are stood on top of never fits the clickbox test at close zoom, which used to stall the repair.
+        if (!ensureClickable(target)) {
             scheduleNextAdaptive(150L, 450L);
             return;
         }

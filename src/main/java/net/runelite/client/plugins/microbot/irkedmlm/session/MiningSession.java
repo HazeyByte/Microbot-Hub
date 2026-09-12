@@ -812,8 +812,7 @@ public class MiningSession extends Session {
                         abandonVein(spot);
                         break;
                     }
-                    if (!Rs2Camera.isTileOnScreen(vein.getLocalLocation()) || !hasSafeClickbox(vein)) {
-                        Rs2Camera.turnTo(vein);
+                    if (!ensureClickable(vein)) {
                         scheduleNextAdaptive(120L, 400L);
                         break;
                     }
@@ -832,9 +831,7 @@ public class MiningSession extends Session {
                     break;
                 }
 
-                if (!Rs2Camera.isTileOnScreen(vein.getLocalLocation()) || !hasSafeClickbox(vein)) {
-                    log.debug("[MiningSession] Vein off-screen or clickbox clipped - turning camera");
-                    Rs2Camera.turnTo(vein);
+                if (!ensureClickable(vein)) {
                     scheduleNextAdaptive(120L, 400L);
                     break;
                 }
