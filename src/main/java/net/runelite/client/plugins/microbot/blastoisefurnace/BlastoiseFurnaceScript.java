@@ -12,6 +12,7 @@ import net.runelite.client.plugins.microbot.breakhandler.BreakHandlerScript;
 import net.runelite.client.plugins.microbot.util.antiban.Rs2Antiban;
 import net.runelite.client.plugins.microbot.util.antiban.Rs2AntibanSettings;
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
+import net.runelite.client.plugins.microbot.util.camera.Rs2Camera;
 import net.runelite.client.plugins.microbot.util.dialogues.Rs2Dialogue;
 import net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
@@ -41,10 +42,14 @@ public class BlastoiseFurnaceScript extends Script {
     static final int coalBag = 12019;
     private static final int MAX_ORE_PER_INTERACTION = 27;
     private static final int MAX_ORE_PER_HYBRID_INTERACTION = 26;
-    public static State state = State.BANKING;
-    static boolean coalBagEmpty;
-    static boolean primaryOreEmpty;
-    static boolean secondaryOreEmpty;
+    private boolean cameraConfigured = false;
+    // Overlay session stats (G2)
+    long sessionStartMs;
+    long sessionStartSmithXp;
+    int barsMade;
+    // Instance state (was static — static leaked stale flags across plugin restarts).
+    public State state = State.BANKING;
+    boolean coalBagEmpty;
     private boolean timerStarted = false;
     private volatile boolean timeIsUp;
     private boolean init = false;
@@ -54,9 +59,15 @@ public class BlastoiseFurnaceScript extends Script {
 
     private boolean hasRequiredOresForSmithing() {
         int primaryOre = config.getBars().getPrimaryOre();
-        int secondaryOre = config.getBars().getSecondaryOre() == null ? -1 : config.getBars().getSecondaryOre();
-        boolean hasPrimaryOre = Rs2Bank.hasItem(primaryOre);
-        boolean hasSecondaryOre = secondaryOre != -1 && Rs2Bank.hasItem(secondaryOre);
+        Integer secondaryOre = config.getBars().getSecondaryOre();
+        // Count bank AND inventory so we don't log out while still holding a smithable load.
+        // ponytail: coal sealed inside the coal bag isn't visible here — full coal-bag
+        // accounting is Phase 3, tracked via coalBagEmpty.
+        boolean hasPrimaryOre = Rs2Bank.hasItem(primaryOre) || Rs2Inventory.hasItem(primaryOre);
+        boolean hasSecondaryOre = secondaryOre == null
+                || Rs2Bank.hasItem(secondaryOre)
+                || Rs2Inventory.hasItem(secondaryOre)
+                || (secondaryOre == COAL && !coalBagEmpty);
         return hasPrimaryOre && hasSecondaryOre;
     }
 
@@ -69,8 +80,9 @@ public class BlastoiseFurnaceScript extends Script {
     public boolean run() {
         Microbot.enableAutoRunOn = false;
         state = State.BANKING;
-        primaryOreEmpty = !Rs2Inventory.hasItem(config.getBars().getPrimaryOre());
-        secondaryOreEmpty = !Rs2Inventory.hasItem(config.getBars().getSecondaryOre());
+        sessionStartMs = System.currentTimeMillis();
+        sessionStartSmithXp = Microbot.getClient().getSkillExperience(Skill.SMITHING);
+        barsMade = 0;
         Rs2Antiban.resetAntibanSettings();
         applyAntiBanSettings();
 
@@ -85,6 +97,8 @@ public class BlastoiseFurnaceScript extends Script {
                 }
 
                 if (!Rs2GameObject.exists(BLAST_FURNACE_DISPENSER)) {
+                    state = State.WALK_TO_FURNACE;
+                    Microbot.status = "Travelling to furnace";
                     if (Rs2Player.isAnimating()) {
                         return;
                     }
@@ -93,14 +107,18 @@ public class BlastoiseFurnaceScript extends Script {
                     return;
                 }
 
+                if (state == State.WALK_TO_FURNACE) {
+                    state = State.BANKING;
+                }
+
+                setupCameraOnce();
+
                 if (!init) {
-                    int inCoffer = Microbot.getVarbitValue(BLAST_FURNACE_COFFER);
-                    int req = evaluateCofferDeposit();
-                    if (inCoffer >= req) {
-                        init = true;
-                        return;
+                    // Only fund the coffer on startup if it is actually empty — never top a
+                    // partially-funded coffer up to the target.
+                    if (!fullCoffer()) {
+                        checkAndTopOffCoffer();
                     }
-                    checkAndTopOffCoffer();
                     init = true;
                     return;
                 }
@@ -156,33 +174,49 @@ public class BlastoiseFurnaceScript extends Script {
                             Rs2Walker.walkTo(new WorldPoint(2930, 10196, 0));
                             Rs2Player.logout();
                             Microbot.stopPlugin(plugin);
+                            return;
                         }
 
                         if (Microbot.getClient().getEnergy() < 8100) {
                             useStaminaPotions();
                         }
 
-                        // Check here if dispenser contains bars. If so we need to clean-up
+                        // Bars already waiting (e.g. after a restart) → go collect them; otherwise load.
                         if (dispenserContainsBars()) {
-                            Rs2Bank.depositAllExcept(coalBag, GAUNTLETS_OF_GOLDSMITHING, ICE_GLOVES, SMITHING_UNIFORM_GLOVES_ICE);
-                            handleDispenserLooting();
-                            return;
+                            state = State.COLLECTING;
                         } else {
-                            retrieveItemsForCurrentFurnaceInteraction();
-                            state = State.SMITHING;
+                            state = State.LOADING;
                         }
                         break;
-                    case SMITHING:
-                        log.info("clicking conveyor");
-                        if (barsInDispenser(config.getBars()) > 0) {
-                            handleDispenserLooting();
-                        }
 
-                        state = State.BANKING;
+                    case LOADING:
+                        Microbot.status = "Loading furnace";
+                        // G4: wear the goldsmith gauntlets BEFORE the ore hits the belt so the
+                        // very first gold batch gets the bonus (no-op when not doing gold).
+                        equipGoldSmithGauntlets();
+                        retrieveItemsForCurrentFurnaceInteraction();
+                        state = State.WAITING;
+                        break;
+
+                    case WAITING:
+                        Microbot.status = "Waiting for bars";
+                        if (barsInDispenser(config.getBars()) > 0 || dispenserContainsBars()) {
+                            state = State.COLLECTING;
+                        } else if (!oreCookingInFurnace()) {
+                            // nothing dispensing and nothing left cooking — reload rather than hang here.
+                            state = State.BANKING;
+                        }
+                        break;
+
+                    case COLLECTING:
+                        Microbot.status = "Collecting bars";
+                        if (handleDispenserLooting()) {
+                            state = State.BANKING;
+                        }
                         break;
                 }
             } catch (Exception ex) {
-                log.trace("Error in main loop: {} - ", ex.getMessage(), ex);
+                log.warn("Error in main loop: {} - ", ex.getMessage(), ex);
             }
 
         }, 0, 200, TimeUnit.MILLISECONDS);
@@ -217,48 +251,67 @@ public class BlastoiseFurnaceScript extends Script {
         }
     }
 
-    private void handleDispenserLooting() {
-        if (!Rs2Inventory.isFull()) {
-            if (!dispenserContainsBars()) {
-                sleepUntil(this::dispenserContainsBars, Rs2Random.between(3000, 5000));
-            }
+    /** @return true when collection is finished (or nothing to do); false to retry (bars still molten). */
+    private boolean handleDispenserLooting() {
+        if (Rs2Inventory.isFull()) {
+            return true; // no room — let BANKING deposit first
+        }
+        if (!dispenserContainsBars()) {
+            sleepUntil(this::dispenserContainsBars, Rs2Random.between(3000, 5000));
+        }
 
-            if (!Rs2Equipment.isWearing(ICE_GLOVES) && !Rs2Equipment.isWearing(SMITHING_UNIFORM_GLOVES_ICE)) {
-                boolean equipped = Rs2Inventory.interact(ICE_GLOVES, "Wear")
-                        || Rs2Inventory.interact(SMITHING_UNIFORM_GLOVES_ICE, "Wear");
-                if (!equipped) {
-                    Microbot.showMessage("Ice gloves or smith gloves required to loot the hot bars.");
-                    Rs2Player.logout();
-                    Microbot.stopPlugin(plugin);
-                    return;
-                }
-            }
-
-            Microbot.getRs2TileObjectCache().query().interact(BLAST_FURNACE_DISPENSER, "Take");
-
-            sleepUntil(() ->
-                    Rs2Widget.hasWidget("What would you like to take?") ||
-                            Rs2Widget.hasWidget("How many would you like") ||
-                            Rs2Widget.hasWidget("The bars are still molten!"), 5000);
-
-            sleepUntil(() ->
-                    Rs2Widget.hasWidget("What would you like to take?") ||
-                            Rs2Widget.hasWidget("How many would you like"), 3000);
-
-            boolean multipleBarTypes = Rs2Widget.hasWidget("What would you like to take?");
-            boolean canLootBar = Rs2Widget.hasWidget("How many would you like");
-
-            if (super.run()) {
-                if (canLootBar || multipleBarTypes) {
-                    Rs2Keyboard.keyPress(KeyEvent.VK_SPACE);
-                }
-                Rs2Inventory.waitForInventoryChanges(5000);
-                Rs2Bank.openBank();
-                equipGoldSmithGauntlets();
+        if (!Rs2Equipment.isWearing(ICE_GLOVES) && !Rs2Equipment.isWearing(SMITHING_UNIFORM_GLOVES_ICE)) {
+            boolean equipped = Rs2Inventory.interact(ICE_GLOVES, "Wear")
+                    || Rs2Inventory.interact(SMITHING_UNIFORM_GLOVES_ICE, "Wear");
+            if (!equipped) {
+                Microbot.showMessage("Ice gloves or smith gloves required to loot the hot bars.");
+                Rs2Player.logout();
+                Microbot.stopPlugin(plugin);
+                return true;
             }
         }
 
-        state = State.BANKING;
+        final int pendingBars = barsInDispenser(config.getBars());
+
+        humanReactionDelay();
+        Microbot.getRs2TileObjectCache().query().interact(BLAST_FURNACE_DISPENSER, "Take");
+
+        sleepUntil(() ->
+                Rs2Widget.hasWidget("What would you like to take?") ||
+                        Rs2Widget.hasWidget("How many would you like") ||
+                        Rs2Widget.hasWidget("The bars are still molten!"), 5000);
+
+        // G6: if the bars haven't cooled (ice gloves not on / just formed), give them a
+        // moment and retry rather than banking on a failed take.
+        if (Rs2Widget.hasWidget("The bars are still molten!")) {
+            log.info("Bars still molten - waiting to cool before retrying");
+            sleep(Rs2Random.between(1200, 2400));
+            return false;
+        }
+
+        sleepUntil(() ->
+                Rs2Widget.hasWidget("What would you like to take?") ||
+                        Rs2Widget.hasWidget("How many would you like"), 3000);
+
+        boolean multipleBarTypes = Rs2Widget.hasWidget("What would you like to take?");
+        boolean canLootBar = Rs2Widget.hasWidget("How many would you like");
+
+        if (super.run()) {
+            if (canLootBar || multipleBarTypes) {
+                Rs2Keyboard.keyPress(KeyEvent.VK_SPACE);
+            }
+            Rs2Inventory.waitForInventoryChanges(5000);
+            if (pendingBars > 0) barsMade += pendingBars;
+            Rs2Bank.openBank();
+            equipGoldSmithGauntlets();
+        }
+        return true;
+    }
+
+    /** Ore still smelting in the furnace for the current bar (primary ore or coal remaining). */
+    private boolean oreCookingInFurnace() {
+        return Microbot.getVarbitValue(config.getBars().getBFPrimaryOreID()) > 0
+                || Microbot.getVarbitValue(BLAST_FURNACE_COAL) > 0;
     }
 
     private void retrievePrimary() {
@@ -322,7 +375,9 @@ public class BlastoiseFurnaceScript extends Script {
     }
 
     private void doOreRun(boolean useIceGloves, boolean waitInventoryChange) {
-        Rs2Walker.walkFastCanvas(new WorldPoint(1940, 4962, 0));
+        // No explicit walk to a tile: putting ore on the belt leaves us a few tiles from the
+        // dispenser and the "Take" interaction auto-paths the rest — like a player just clicking
+        // the dispenser. Here we only wait for the bars to be produced.
         sleep(3400);
         sleepUntil(() -> barsInDispenser(config.getBars()) > 0, 10000);
 
@@ -393,22 +448,35 @@ public class BlastoiseFurnaceScript extends Script {
     private final Runnable retrieveCoalAndGold = this::retrieveCoalAndGold;
     private final Runnable retrieveDoubleCoal = this::retrieveDoubleCoal;
 
+    // Retrieval action codes (pure decision, split out so the feeding math is unit-testable).
+    public static final int ACTION_DOUBLE_COAL = 0;
+    public static final int ACTION_COAL_AND_PRIMARY = 1;
+    public static final int ACTION_PRIMARY = 2;
+    public static final int ACTION_COAL_AND_GOLD = 0;
+
+    /** Standard bars: pick the retrieval action from how many coal-bag loads are already in the furnace. */
+    public static int standardAction(int batch, int doubleCoalMax) {
+        if (batch <= doubleCoalMax) return ACTION_DOUBLE_COAL;
+        if (batch <= 6) return ACTION_COAL_AND_PRIMARY;
+        return ACTION_PRIMARY;
+    }
+
+    /** Hybrid (gold-included) bars: coal+gold while the furnace is still coal-light, else coal+primary. */
+    public static int hybridAction(int batch, int goldThreshold) {
+        return batch <= goldThreshold ? ACTION_COAL_AND_GOLD : ACTION_COAL_AND_PRIMARY;
+    }
+
     private void dispatchStandard(int batch, int doubleCoalMax, Runnable doubleCoal, Runnable coalAndPrimary, Runnable primary) {
-        if (batch <= doubleCoalMax) {
-            doubleCoal.run();
-        } else if (batch <= 6) {
-            coalAndPrimary.run();
-        } else {
-            primary.run();
+        switch (standardAction(batch, doubleCoalMax)) {
+            case ACTION_DOUBLE_COAL: doubleCoal.run(); break;
+            case ACTION_COAL_AND_PRIMARY: coalAndPrimary.run(); break;
+            default: primary.run();
         }
     }
 
     private void dispatchHybrid(int batch, int goldThreshold, Runnable coalAndGold, Runnable coalAndPrimary) {
-        if (batch <= goldThreshold) {
-            coalAndGold.run();
-        } else {
-            coalAndPrimary.run();
-        }
+        if (hybridAction(batch, goldThreshold) == ACTION_COAL_AND_GOLD) coalAndGold.run();
+        else coalAndPrimary.run();
     }
 
     private void useStaminaPotions() {
@@ -440,15 +508,15 @@ public class BlastoiseFurnaceScript extends Script {
                 .orElse(null);
     }
 
-    private int getDoseFromName(String potionItemName) {
+    public static int getDoseFromName(String potionItemName) {
         Matcher matcher = ITEM_NAME_SUFFIX_PATTERN.matcher(potionItemName);
-        if (matcher.find()) {
+        if (matcher.find() && matcher.group(2) != null) {
             return Integer.parseInt(matcher.group(2));
         }
         return 0;
     }
 
-    private String getBaseName(String itemName) {
+    public static String getBaseName(String itemName) {
         Matcher matcher = ITEM_NAME_SUFFIX_PATTERN.matcher(itemName);
         if (matcher.find()) {
             return matcher.group(1).trim();
@@ -491,30 +559,37 @@ public class BlastoiseFurnaceScript extends Script {
     }
 
     private boolean putOreOnConveyorBelt() {
-        final int oreCount = getInventoryOreCount();
-        if (oreCount <= 0) {
-            log.error("No ore in Inventory");
-            return false;
-        }
-        if (!Microbot.getRs2TileObjectCache().query().interact(BLAST_FURNACE_CONVEYER_BELT_CLICKABLE, "Put-ore-on")) {
-            log.error("Failed to interact with conveyor belt");
-            return false;
-        }
-        sleepUntil(() -> Rs2Dialogue.isInDialogue() || getInventoryOreCount() < oreCount, 10_000);
-        if (Rs2Widget.hasWidget("You must ask the foreman's")) {
-            log.info("Need to pay the noob tax");
-            if(timerStarted && !timeIsUp){
-                return putOreOnConveyorBelt();
+        // Bounded retry loop (was unbounded recursion — a persistent foreman widget
+        // could StackOverflow). Each pass re-clicks the belt; pay the tax only when
+        // we're outside a paid 10-minute window.
+        for (int attempt = 0; attempt < 5; attempt++) {
+            final int oreCount = getInventoryOreCount();
+            if (oreCount <= 0) {
+                log.error("No ore in Inventory");
+                return false;
             }
-
-            handleTax();
-            return putOreOnConveyorBelt();
+            if (!Microbot.getRs2TileObjectCache().query().interact(BLAST_FURNACE_CONVEYER_BELT_CLICKABLE, "Put-ore-on")) {
+                log.error("Failed to interact with conveyor belt");
+                return false;
+            }
+            sleepUntil(() -> Rs2Dialogue.isInDialogue() || getInventoryOreCount() < oreCount, 10_000);
+            if (!Rs2Widget.hasWidget("You must ask the foreman's")) {
+                return true;
+            }
+            log.info("Need to pay the noob tax");
+            if (!(timerStarted && !timeIsUp)) {
+                handleTax();
+            }
         }
-        return true;
+        log.warn("Gave up putting ore on the conveyor belt after retries");
+        return false;
     }
 
     public void setTenMinuteTimer(){
         if(timerStarted) return;
+        // Must reset here: once the first timer fires timeIsUp stays true forever
+        // otherwise, which made the tax re-pay on every subsequent foreman prompt.
+        timeIsUp = false;
 
         Timer timer = new Timer();
 
@@ -610,16 +685,37 @@ public class BlastoiseFurnaceScript extends Script {
     }
 
     private void applyAntiBanSettings() {
+        // Simple, non-blocking antiban — this is what worked originally. Deliberately NOT the
+        // smithing template: that enables playSchedule and forces per-action cooldowns, which
+        // pause this tight loop. Natural mouse gives human movement without gating the cycle.
         Rs2AntibanSettings.antibanEnabled = true;
         Rs2AntibanSettings.naturalMouse = true;
-        Rs2AntibanSettings.devDebug = true;
+        Rs2AntibanSettings.devDebug = false;
+    }
+
+    // One-time camera setup, like a player angling the view once so the bank, conveyor and
+    // dispenser are all visible. After this we never auto-rotate — object interactions already
+    // nudge the camera only when a target is genuinely off-screen. Pitch only; the player's
+    // yaw/zoom are left as they set them.
+    private void setupCameraOnce() {
+        if (cameraConfigured) return;
+        cameraConfigured = true;
+        Rs2Camera.adjustPitch(0.9f);
+    }
+
+    // H2: small inline reaction beat before the loot click. Cycle-level pacing/fatigue/
+    // breaks are handled by the Rs2Antiban framework (actionCooldown + the smithing
+    // template), not here — this is just the pre-click latency the framework doesn't cover.
+    private void humanReactionDelay() {
+        if (!config.humanisation()) return;
+        sleep(Rs2Random.between(0, 99) < 85 ? Rs2Random.between(200, 900) : Rs2Random.between(900, 2100));
     }
 
     public void shutdown() {
         init = false;
+        cameraConfigured = false;
         state = State.BANKING;
-        primaryOreEmpty = false;
-        secondaryOreEmpty = false;
+        coalBagEmpty = false;
         super.shutdown();
     }
 
@@ -628,7 +724,7 @@ public class BlastoiseFurnaceScript extends Script {
             return BreakHandlerScript.breakIn * 20;
         }
 
-        return 72000;
+        return config.cofferTarget();
     }
 
     public void checkAndTopOffCoffer() {

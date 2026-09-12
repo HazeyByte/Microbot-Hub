@@ -1,112 +1,57 @@
-﻿# Blastoise Furnace Plugin
+# Blastoise Furnace
 
-The **Blastoise Furnace Plugin** is an automation tool for Old School RuneScape, designed to efficiently smelt bars at furnaces, such as the Blast Furnace minigame. Built for the Microbot RuneLite client, this plugin streamlines the process of smelting ores into bars, managing inventory, and banking, allowing for hands-free and optimized Smithing experience gains.
+Automates bar smelting at the **Blast Furnace** in Keldagrim. Runs ore from the bank onto the
+conveyor belt, waits for the dispenser, cools and collects the bars with ice gloves, banks, and
+repeats — managing the coffer and (for low-level accounts) the foreman fee along the way.
 
----
+## Supported bars
 
-## Features
+| Bar | Notes |
+|-----|-------|
+| Steel | iron + coal |
+| Gold | goldsmith gauntlets required; coal bag not used |
+| Mithril / Adamantite / Runite | primary ore + coal (coal bag required) |
+| Hybrid Mithril / Adamantite / Runite | as above, but tops the load with gold ore for extra Smithing XP |
 
-- **Automated Bar Smelting:**  
-  Automatically smelts ores into bars at supported furnaces, including the Blast Furnace, for fast and efficient Smithing XP.
-
-- **Banking and Inventory Management:**  
-  Withdraws required ores from the bank, manages inventory space, and deposits finished bars as needed.
-
-- **Overlay Display:**  
-  Real-time overlay shows current status, bars smelted, experience gained, runtime, and other useful stats.
-
-- **Configurable Options:**  
-  Users can select which type of bar to smelt, enable/disable the overlay, and adjust advanced behaviors in the configuration panel.
-
-- **Failsafes and Error Handling:**  
-  Handles running out of ores, full inventory, or unexpected in-game events.
-
----
-
-## How It Works
-
-1. **Configuration:**  
-   Select the type of bar to smelt and adjust settings in the plugin panel.
-
-2. **Startup:**  
-   The plugin checks for required ores in your inventory or bank. If needed, it will withdraw supplies.
-
-3. **Automation Loop:**  
-   The script performs the following:
-    - Travels to the furnace (if not already there)
-    - Smelts ores into bars
-    - Banks for more ores or deposits bars when inventory is full
-    - Repeats the process for continuous training
-
-4. **Overlay:**  
-   Displays real-time information such as:
-    - Current action (e.g., "Smelting", "Banking")
-    - Bars smelted
-    - Experience gained
-    - Runtime and efficiency stats
-
-5. **Failsafes:**  
-   Pauses or stops if requirements are not met, or if unexpected events occur.
-
----
-
-## Configuration
-
-The plugin provides a configuration panel (`BlastoiseFurnaceConfig`) where you can:
-
-- Select the type of bar to smelt (see `enums/Bars.java` for supported bars)
-- Enable or disable the overlay
-- Adjust advanced options (delays, anti-patterns, etc.)
-
----
+The script reads the coal already in the furnace each trip and picks how to fill the next load
+(double coal / coal + primary / primary only) so the furnace stays fed rather than starving on
+coal or ore.
 
 ## Requirements
 
-- Microbot RuneLite client
-- Sufficient Smithing level for the selected bar
-- Required ores in the bank/inventory
-- Access to a supported furnace (e.g., Blast Furnace)
+- **Ice gloves** or **smiths gloves (i)** equipped or in the bank (needed to take hot bars).
+- **Coal bag** in inventory or bank (all bars except gold).
+- **Goldsmith gauntlets** for gold / hybrid bars.
+- **Stamina and/or energy potions** in the bank (run management).
+- **Coins in the bank** for the coffer, plus 2,500 gp per 10 min for the foreman if under 60 Smithing.
+- Sufficient Smithing level for the chosen bar.
 
----
+## Configuration
 
-## Usage
+- **Bars** — which bar to smelt.
+- **Human-like behaviour** *(on by default)* — reaction delays, the shared Rs2Antiban smithing
+  profile (fatigue, attention span, play-style timing, natural mouse), occasional camera glances,
+  and occasional simulated mistakes.
+- **Coffer top-up (coins)** — how many coins to keep in the coffer. Only refilled when the coffer
+  actually runs empty (default 72,000).
 
-1. **Enable the Plugin:**  
-   Open the Microbot sidebar, find the Blastoise Furnace Plugin, and enable it.
+## Overlay
 
-2. **Configure Settings:**  
-   Select your desired bar type and adjust settings as needed.
+Shows current state, bars made, Smithing XP gained, XP/hr, live coffer balance, and runtime.
 
-3. **Start the Plugin:**  
-   Click "Start" to begin automated bar smelting.
+## Safety / failsafes
 
-4. **Monitor Progress:**  
-   Watch the overlay for real-time updates on progress and status.
+- Walks out via the stairs (stopping coffer drain) and stops when the bank runs out of ore.
+- Stops with a message if a required item (coal bag, gauntlets, ice/smiths gloves) is missing.
+- Never leaves the character idle mid-run with hot bars — micro-breaks are disabled on purpose,
+  since standing idle in the furnace drains the coffer.
 
-5. **Stop at Any Time:**  
-   Click "Stop" to halt the automation.
+## Source files
 
----
+- `BlastoiseFurnacePlugin.java` — lifecycle, inventory/coal-bag chat tracking.
+- `BlastoiseFurnaceScript.java` — the BANKING ↔ SMITHING state machine and feeding logic.
+- `BlastoiseFurnaceConfig.java` — configuration.
+- `BlastoiseFurnaceOverlay.java` — the stats overlay.
+- `enums/Bars.java`, `enums/State.java` — bar definitions and script states.
 
-## Limitations
-
-- Only supports bars and activities defined in the script logic.
-- Requires the player to have the necessary ores and Smithing level.
-- May not handle all random events or interruptions (e.g., player death, aggressive NPCs).
-
----
-
-## Source Files
-
-- `BlastoiseFurnacePlugin.java` – Main plugin class, manages lifecycle and integration.
-- `BlastoiseFurnaceScript.java` – Core automation logic for bar smelting.
-- `BlastoiseFurnaceConfig.java` – User configuration options.
-- `BlastoiseFurnaceOverlay.java` – In-game overlay display.
-
-### Enums (`enums/`)
-- `Bars.java` – Supported bar types.
-- `State.java` – Script state management.
-
----
-
-**Automate your Smithing training and maximize your experience gains with the Blastoise Furnace Plugin!**
+*Created by Fishy. Updated by Acun, Wassuppzzz.*

@@ -3,22 +3,16 @@ package net.runelite.client.plugins.microbot.blastoisefurnace;
 import com.google.inject.Provides;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
-import net.runelite.api.ItemContainer;
 import net.runelite.api.events.ChatMessage;
-import net.runelite.api.events.ItemContainerChanged;
-import net.runelite.api.gameval.ItemID;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.plugins.microbot.PluginConstants;
-import net.runelite.client.plugins.microbot.blastoisefurnace.enums.State;
 import net.runelite.client.ui.overlay.OverlayManager;
 
 import javax.inject.Inject;
 import java.awt.*;
-
-import static net.runelite.client.plugins.microbot.blastoisefurnace.BlastoiseFurnaceScript.*;
 
 
 @PluginDescriptor(
@@ -35,7 +29,7 @@ import static net.runelite.client.plugins.microbot.blastoisefurnace.BlastoiseFur
 )
 @Slf4j
 public class BlastoiseFurnacePlugin extends Plugin {
-    final static String version = "1.2.2";
+    final static String version = "1.5.1";
     @Inject
     private BlastoiseFurnaceConfig config;
 
@@ -48,6 +42,8 @@ public class BlastoiseFurnacePlugin extends Plugin {
     private OverlayManager overlayManager;
     @Inject
     private BlastoiseFurnaceOverlay blastoiseFurnaceOverlay;
+    @Inject
+    private BlastoiseFurnaceSceneOverlay blastoiseFurnaceSceneOverlay;
 
     @Inject
     BlastoiseFurnaceScript blastoiseFurnaceScript;
@@ -56,6 +52,7 @@ public class BlastoiseFurnacePlugin extends Plugin {
     protected void startUp() throws AWTException {
         if (overlayManager != null) {
             overlayManager.add(blastoiseFurnaceOverlay);
+            overlayManager.add(blastoiseFurnaceSceneOverlay);
         }
         blastoiseFurnaceScript.run();
     }
@@ -64,42 +61,17 @@ public class BlastoiseFurnacePlugin extends Plugin {
     public void onChatMessage(ChatMessage chatMessage) {
         if (chatMessage.getType() == ChatMessageType.GAMEMESSAGE) {
             if (chatMessage.getMessage().contains("The coal bag is now empty.")) {
-                if (!coalBagEmpty) coalBagEmpty = true;
+                blastoiseFurnaceScript.coalBagEmpty = true;
             }
-
             if (chatMessage.getMessage().contains("The coal bag contains")) {
-                if (coalBagEmpty) coalBagEmpty = false;
+                blastoiseFurnaceScript.coalBagEmpty = false;
             }
         }
-    }
-
-    @Subscribe
-    public void onItemContainerChanged(ItemContainerChanged inventory) {
-        if (inventory.getItemContainer().getId() != 93) return;
-
-        final ItemContainer inv = inventory.getItemContainer();
-        final boolean hasCoal = inv.contains(ItemID.COAL);
-        final boolean hasPrimary = inv.contains(config.getBars().getPrimaryOre());
-        final boolean hasSecondary = inv.contains(config.getBars().getSecondaryOre());
-
-        // Coal bag tracking
-        if (state != State.BANKING && !hasCoal && !coalBagEmpty) coalBagEmpty = true;
-        if (state != State.SMITHING && hasCoal && coalBagEmpty) coalBagEmpty = false;
-
-        // Primary ore tracking
-        if (state != State.SMITHING && hasPrimary && primaryOreEmpty) primaryOreEmpty = false;
-        if (state != State.BANKING && !hasPrimary && !primaryOreEmpty) primaryOreEmpty = true;
-
-        // Secondary ore tracking
-        if (state != State.SMITHING && hasSecondary && secondaryOreEmpty) {
-            secondaryOreEmpty = false;
-            System.out.println("secondary set to not empty"); // Optional debug
-        }
-        if (state != State.BANKING && !hasSecondary && !secondaryOreEmpty) secondaryOreEmpty = true;
     }
 
     protected void shutDown() {
         blastoiseFurnaceScript.shutdown();
         overlayManager.remove(blastoiseFurnaceOverlay);
+        overlayManager.remove(blastoiseFurnaceSceneOverlay);
     }
 }
