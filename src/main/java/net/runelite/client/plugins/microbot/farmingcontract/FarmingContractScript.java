@@ -148,7 +148,7 @@ public class FarmingContractScript extends Script {
 
     private Produce findProduceByContractName(String name) {
         for (Produce p : Produce.values()) {
-            if (p.getContractName() != null && p.getContractName().equalsIgnoreCase(name)) {
+            if (p.getName() != null && p.getName().equalsIgnoreCase(name)) {
                 return p;
             }
         }
