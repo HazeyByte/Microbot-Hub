@@ -1303,6 +1303,15 @@ public class IrkedMLMScript extends Script {
             return MLMStatus.DEPOSIT_HOPPER;
         }
 
+        // Full, but not of pay-dirt: junk, nuggets and anything else the user is carrying have taken
+        // every slot. Returning MINING here span forever — MiningSession immediately reports INV_FULL,
+        // the session completes, and we land right back here. Emptying the sack is the only move that
+        // frees space, and it is harmless when the sack is already empty.
+        if (Rs2Inventory.isFull()) {
+            log.warn("[MLM] Inventory full with no pay-dirt to deposit — going to empty the sack to free space");
+            return MLMStatus.EMPTY_SACK;
+        }
+
         return MLMStatus.MINING;
     }
 
