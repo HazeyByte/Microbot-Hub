@@ -27,6 +27,7 @@ import net.runelite.client.plugins.microbot.irkedmlm.enums.AfkParkSide;
 import net.runelite.client.plugins.microbot.irkedmlm.enums.MLMMiningSpot;
 import net.runelite.client.plugins.microbot.irkedmlm.enums.MouseActivity;
 import net.runelite.client.plugins.microbot.util.camera.Rs2Camera;
+import net.runelite.api.gameval.ItemID;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
@@ -941,6 +942,20 @@ public class MiningSession extends Session {
                     break;
                 }
 
+                // A gem has turned up mid-bout. Bin it and get straight back on the SAME vein.
+                //
+                // The re-click is the whole point: dropping breaks the mining animation, and without
+                // it this state simply waits — the vein is still there and the stuck test needs ten
+                // seconds of silence — so the bout would stall, then markFailed() would blacklist a
+                // perfectly good vein and move to another one. CLICKED re-clicks targetVein and
+                // already falls back to reselecting if the vein despawned while we were dropping.
+                if (shouldDropGems() && dropGemsFromInventory()) {
+                    lastMineClickMs = 0L; // clear the click-gap throttle so the resume is not delayed
+                    transitionSub(MiningSubState.CLICKED);
+                    scheduleNextAdaptive(180L, 420L);
+                    break;
+                }
+
                 // Human-like: once per mining bout, pick a mouse behaviour (AFK off-screen /
                 // pre-hover the next vein / leave it put) instead of always going off-screen.
                 handleMiningMouseBehaviour(spot);
@@ -1789,6 +1804,40 @@ public class MiningSession extends Session {
                 .nearest();
         return vein != null && isActiveVein(vein) ? vein : null;
     }
+
+    /** Uncut gems that turn up while mining. */
+    private static final int[] GEM_IDS = {
+            ItemID.UNCUT_SAPPHIRE, ItemID.UNCUT_EMERALD, ItemID.UNCUT_RUBY, ItemID.UNCUT_DIAMOND
+    };
+
+    /** Whether the user wants gems binned. A gem bag in use makes dropping them pointless. */
+    private boolean shouldDropGems() {
+        return config != null && config.dropGems() && !config.useGemBag();
+    }
+
+    /**
+     * Drops every uncut gem currently carried. Usually one or two items, so this completes in a
+     * couple of clicks rather than blocking the executor.
+     *
+     * @return {@code true} if anything was dropped
+     */
+    private boolean dropGemsFromInventory() {
+        boolean dropped = false;
+        for (int gemId : GEM_IDS) {
+            int guard = 0;
+            while (Rs2Inventory.hasItem(gemId) && guard++ < 28) {
+                if (!Rs2Inventory.interact(gemId, "Drop")) {
+                    break;
+                }
+                dropped = true;
+            }
+        }
+        if (dropped) {
+            log.debug("[MiningSession] Dropped gems mid-bout — re-clicking the same vein at {}", targetVein);
+        }
+        return dropped;
+    }
+
 
     /**
      * Returns {@code true} if any active (non-depleted) ore vein is present at
