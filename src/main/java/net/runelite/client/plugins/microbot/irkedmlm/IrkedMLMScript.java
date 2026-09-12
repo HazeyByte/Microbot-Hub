@@ -642,7 +642,13 @@ public class IrkedMLMScript extends Script {
                     boolean    failed      = sackSession.isFailed();
                     WorldPoint returnPoint = sackSession.getReturnPoint();
                     sackSession.reset();
-                    if (failed) {
+                    if (failed && payDirtCount() > 0) {
+                        // SackSession aborts when pay-dirt is in the inventory, and says so: it wants a
+                        // hopper trip, not recovery. Honour that instead of treating it as a fault.
+                        log.info("[MLM] Sack session aborted holding {} pay-dirt — depositing at the hopper first",
+                                payDirtCount());
+                        setStatus(MLMStatus.DEPOSIT_HOPPER);
+                    } else if (failed) {
                         log.warn("[MLM] Sack session failed - moving to recovery");
                         setStatus(MLMStatus.RECOVERY);
                     } else {
@@ -1081,12 +1087,10 @@ public class IrkedMLMScript extends Script {
             log.info("[MLM] Audit: {} pay-dirt remains, sack at capacity ({}/{}) — clearing sack",
                     residual, currentSackCount(), maxSackSize);
 
-            if (!hasOreInInventory() && !hasGemsInInventory()) {
-                log.info("[MLM] Audit: inventory is only pay-dirt — dropping to empty sack");
-                dropAllPayDirt();
-            } else {
-                log.info("[MLM] Audit: valuable ores in inventory — emptying sack first");
-            }
+            // Always drop: SackSession refuses to run while pay-dirt is held (it needs the slots), so
+            // carrying it in "because there are ores too" ended the trip in RECOVERY. The pile is
+            // reclaimed after the sack is emptied, so dropping costs nothing.
+            dropAllPayDirt();
             sackState.clearProjection();
             setStatus(MLMStatus.EMPTY_SACK);
             return;
@@ -1101,9 +1105,7 @@ public class IrkedMLMScript extends Script {
             setSackIsFull(true);
             log.info("[MLM] Audit: deposit batch of {} projects sack to {}/{} (varbit now {}) with {} pay-dirt remaining — drop pay-dirt and empty sack (do not retry deposit)",
                     thisBatchDeposited, projectedAfterBatch, maxSackSize, currentSackCount(), residual);
-            if (!hasOreInInventory() && !hasGemsInInventory() && payDirtCount() > 0) {
-                dropAllPayDirt();
-            }
+            dropAllPayDirt();
             setStatus(MLMStatus.EMPTY_SACK);
             return;
         }
@@ -1153,9 +1155,7 @@ public class IrkedMLMScript extends Script {
                 }
                 setSackIsFull(true);
                 sackState.clearProjection();
-                if (!hasOreInInventory() && !hasGemsInInventory()) {
-                    dropAllPayDirt();
-                }
+                dropAllPayDirt();
                 setStatus(MLMStatus.EMPTY_SACK);
                 return;
             }
@@ -1247,13 +1247,15 @@ public class IrkedMLMScript extends Script {
         droppedPayDirt.beginCollecting(now);
 
         if (!Rs2GroundItem.exists(ItemID.PAYDIRT, 12)) {
-            log.info("[MLM] No dropped pay-dirt left on the ground — collection done");
+            log.info("[MLM] Collected the dropped pay-dirt — depositing it before returning to mine");
             droppedPayDirt.clear();
+            routeReclaimedPayDirt();
             return false;
         }
         if (Rs2Inventory.emptySlotCount() <= 0) {
-            log.info("[MLM] Inventory full while collecting dropped pay-dirt — stopping");
+            log.info("[MLM] Inventory full while collecting dropped pay-dirt — depositing what we have");
             droppedPayDirt.clear();
+            routeReclaimedPayDirt();
             return false;
         }
 
@@ -1352,8 +1354,8 @@ public class IrkedMLMScript extends Script {
                 }
 
                 if (isSackFull() || hasOreInInventory()) {
-                    if (payDirtCount() > 0 && !hasOreInInventory() && !hasGemsInInventory()) {
-                        log.info("[MLM] IDLE eval: sack full with only pay-dirt in inventory — dropping pay-dirt before emptying sack");
+                    if (payDirtCount() > 0) {
+                        log.info("[MLM] IDLE eval: sack full with pay-dirt in inventory — dropping it before emptying sack");
                         dropAllPayDirt();
                     }
                     // Emptying the sack doesn't need the waterwheel; repair only happens on the deposit trip.
@@ -1835,7 +1837,7 @@ public class IrkedMLMScript extends Script {
                 currentAnchor = miningSpot.getWorldPoint().get(0);
             }
 
-            Rs2Walker.setTarget(null);
+            Rs2Walker.setTarget(null, "mlm_route_reset");
 
             WorldPoint safe = recoverySafeWalkPoint(miningSpot);
             log.info("[MLM] Hard recovery: walking to safe {} for spot {}", safe, miningSpot);
@@ -1865,7 +1867,7 @@ public class IrkedMLMScript extends Script {
         }
 
         resetAllSessions();
-        Rs2Walker.setTarget(null);
+        Rs2Walker.setTarget(null, "mlm_route_reset");
 
         if (attempts >= 2) {
             log.info("[MLM] Recovery attempt {} — walking to safe area (resolver for any location)", attempts);
@@ -2083,6 +2085,24 @@ public class IrkedMLMScript extends Script {
                 }
             }
         }
+    }
+
+    /**
+     * After reclaiming dropped pay-dirt, send it to the hopper rather than carrying it back to the
+     * veins. We are stood at the facility with the sack freshly emptied, so this is both the cheapest
+     * and the most natural moment to deposit — walking back to mine with a part-load, then walking
+     * here again, is neither.
+     */
+    private void routeReclaimedPayDirt() {
+        if (payDirtCount() <= 0) {
+            return;
+        }
+        if (isSackFull() || sackIsFullFlag) {
+            debug("[MLM] Reclaimed pay-dirt but the sack is still full — leaving routing to the audit");
+            return;
+        }
+        log.info("[MLM] Reclaimed {} pay-dirt — depositing at the hopper before mining", payDirtCount());
+        setStatus(MLMStatus.DEPOSIT_HOPPER);
     }
 
     private int queryBrokenStrutCount() {
@@ -2529,7 +2549,7 @@ public class IrkedMLMScript extends Script {
         saveStats();
         super.shutdown();
         Rs2Antiban.resetAntibanSettings();
-        Rs2Walker.setTarget(null);
+        Rs2Walker.setTarget(null, "mlm_route_reset");
         resetAllSessions();
         log.info("MLM script shutdown complete");
     }

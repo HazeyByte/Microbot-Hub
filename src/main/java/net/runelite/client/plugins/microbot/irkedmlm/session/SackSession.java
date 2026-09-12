@@ -431,6 +431,14 @@ public class SackSession extends Session {
                             return; // one item type per tick, come back next tick
                         }
                     }
+                    // Gems come out of the sack with the ore. With Deposit Items they are not banked, so
+                    // with "Drop Gems" on they must be binned here — this is the only place they ever
+                    // appear, and DROP_GEMS (reachable from IDLE/after-mining) never runs mid-sack-trip,
+                    // which is why enabling the option appeared to do nothing.
+                    if (config.dropGems() && !config.useGemBag() && dropGemsFromInventory()) {
+                        scheduleNextAdaptive(180L, 600L);
+                        return;
+                    }
                     // Nothing left to deposit. Nuggets are deliberately left in the inventory: they are
                     // not sent to the deposit box like ores, so they accumulate for the sack/ladder
                     // upgrades. The overlay counts them from the owned total either way.
@@ -491,6 +499,27 @@ public class SackSession extends Session {
             case RETURN_TO_SPOT:      updateStatus("Returning to Mining Spot"); break;
             default:                  updateStatus(formatEnum(next.name()));     break;
         }
+    }
+
+    /** Uncut gems the sack yields alongside ore. */
+    private static final int[] GEM_IDS = {
+            ItemID.UNCUT_SAPPHIRE, ItemID.UNCUT_EMERALD, ItemID.UNCUT_RUBY, ItemID.UNCUT_DIAMOND
+    };
+
+    /**
+     * Drops one gem type per call, so the executor thread is never blocked dropping a full load.
+     *
+     * @return {@code true} if something was dropped (caller should come back next tick)
+     */
+    private boolean dropGemsFromInventory() {
+        for (int gemId : GEM_IDS) {
+            if (Rs2Inventory.hasItem(gemId) && Rs2Inventory.interact(gemId, "Drop")) {
+                log.debug("[SackSession] Dropped gem {} (Drop Gems is on and no gem bag in use)", gemId);
+                applyActionCooldown();
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean hasOreInInventory() {

@@ -1858,10 +1858,10 @@ public class MiningSession extends Session {
         if (target == null || playerLoc == null) return;
         int distance = playerLoc.distanceTo(target);
         if (distance <= 2) {
-            Rs2Walker.setTarget(null);
+            Rs2Walker.setTarget(null, "mlm_mining_retarget");
             return;
         }
-        Rs2Walker.setTarget(null);
+        Rs2Walker.setTarget(null, "mlm_mining_retarget");
 
         int webWalkThreshold = (spot != null && spot.isDownstairs())
                 ? LOWER_WEB_WALK_MIN_DISTANCE

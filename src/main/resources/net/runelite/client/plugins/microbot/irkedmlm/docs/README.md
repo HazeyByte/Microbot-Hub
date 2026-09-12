@@ -52,7 +52,7 @@ the deposit box, repairs the water-wheel struts, and tracks ores/nuggets/XP in a
 | Setting | What it does |
 |---------|--------------|
 | Use Gem Bag | Withdraw the bag if needed, keep it locked in inventory slot 1, and empty it at the deposit box when a gem slot fills. |
-| Drop Gems | Drop uncut gems at the vein to save inventory space. |
+| Drop Gems | Bin uncut gems instead of banking them, to save inventory space. They come out of the sack with the ore, so they are dropped during the sack trip. Ignored while *Use Gem Bag* is on. |
 
 ### Hopper & Sack
 
@@ -136,6 +136,10 @@ even on Active.
   became true and it kept re-offering pay-dirt to the hopper. Now, if a wheel is turning and the
   hopper still refuses an entire load, that refusal is treated as proof the sack is full and the real
   capacity is recorded — so a wrong setting costs one rejected deposit, not a stuck run.
+- **Full sack mid-deposit** runs: drop the carried pay-dirt → empty the sack → collect the pay-dirt
+  again → deposit it at your configured hopper → back to mining. The pay-dirt is always dropped
+  first, even when ores are also being carried: the sack cannot be emptied while pay-dirt occupies
+  the slots the withdrawn ore needs.
 - **Dropped pay-dirt is picked back up.** Emptying the sack needs free inventory slots, so a full load
   of pay-dirt is dropped first. Once the sack is clear the pile is collected again before the bot
   walks off. It is written off if it has been on the floor too long to still exist, if the inventory
