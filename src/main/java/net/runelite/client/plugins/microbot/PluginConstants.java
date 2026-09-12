@@ -38,6 +38,7 @@ public final class PluginConstants
     public static final String DV = "<html>[<font color=#800080>DV</font>] ";
     public static final String RED_BRACKET = "<html>[<font color=#FF4D4D>RB</font>] ";
     public static final String STKS = "<html>[<font color=orange>STKS</font>] ";
+    public static final String IRKED = "<html>[<font color=#FFA500>iM</font>] ";
 
     public static final boolean DEFAULT_ENABLED = false;
     public static final boolean IS_EXTERNAL = true; //test
