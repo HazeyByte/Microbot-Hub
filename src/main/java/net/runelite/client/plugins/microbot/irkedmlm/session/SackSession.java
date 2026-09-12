@@ -431,10 +431,8 @@ public class SackSession extends Session {
                             return; // one item type per tick, come back next tick
                         }
                     }
-                    // Gems come out of the sack with the ore. With Deposit Items they are not banked, so
-                    // with "Drop Gems" on they must be binned here — this is the only place they ever
-                    // appear, and DROP_GEMS (reachable from IDLE/after-mining) never runs mid-sack-trip,
-                    // which is why enabling the option appeared to do nothing.
+                    // Safety net: gems carried into the sack trip occupy the slots the ore withdrawals
+                    // need. The primary drop happens during mining, where they actually appear.
                     if (config.dropGems() && !config.useGemBag() && dropGemsFromInventory()) {
                         scheduleNextAdaptive(180L, 600L);
                         return;

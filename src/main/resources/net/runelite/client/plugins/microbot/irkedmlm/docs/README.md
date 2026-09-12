@@ -52,7 +52,7 @@ the deposit box, repairs the water-wheel struts, and tracks ores/nuggets/XP in a
 | Setting | What it does |
 |---------|--------------|
 | Use Gem Bag | Withdraw the bag if needed, keep it locked in inventory slot 1, and empty it at the deposit box when a gem slot fills. |
-| Drop Gems | Bin uncut gems instead of banking them, to save inventory space. They come out of the sack with the ore, so they are dropped during the sack trip. Ignored while *Use Gem Bag* is on. |
+| Drop Gems | Bin uncut gems as soon as they appear while mining, so they never eat pay-dirt slots. Ignored while *Use Gem Bag* is on. |
 
 ### Hopper & Sack
 

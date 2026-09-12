@@ -1292,12 +1292,17 @@ public class IrkedMLMScript extends Script {
             return MLMStatus.EMPTY_SACK;
         }
 
-        // Priority 2: Inventory full of pay-dirt — deposit at hopper. Repair check happens in handler.
+        // Gems before the hopper trip: this check used to sit *below* the deposit branch, which
+        // matches on any full inventory and so made it unreachable. Never carry gems to the hopper.
+        if (config.dropGems() && !config.useGemBag() && hasGemsInInventory()) {
+            return MLMStatus.DROP_GEMS;
+        }
+
+        // Inventory full of pay-dirt — deposit at hopper. Repair check happens in handler.
         if (Rs2Inventory.isFull() && payDirtCount() > 0) {
             return MLMStatus.DEPOSIT_HOPPER;
         }
 
-        if (config.dropGems() && hasGemsInInventory())   return MLMStatus.DROP_GEMS;
         return MLMStatus.MINING;
     }
 
@@ -1406,6 +1411,16 @@ public class IrkedMLMScript extends Script {
     }
 
     private void handleMiningStatus() {
+        // Gems turn up in the inventory while mining. Bin them the moment they appear and carry
+        // straight on — no status change, no interrupted bout.
+        //
+        // They used to be routed through the DROP_GEMS status, reached from
+        // determineNextStatusAfterMining(). That branch could never fire: a mining session only ends
+        // with a full inventory, and the DEPOSIT_HOPPER check above it matches first every time. So
+        // gems were never dropped at all, and each one permanently cost a pay-dirt slot for the rest
+        // of the run. Dropping here, where they actually appear, is both the fix and what a player does.
+        dropGemsIfWanted();
+
         // GUARD: never start mining while holding a full inventory of pay-dirt.
         // This catches edge cases where status was set to MINING but pay-dirt
         // remains (e.g. after repair dropped some for hammer, or recovery).
@@ -1769,7 +1784,9 @@ public class IrkedMLMScript extends Script {
 
     private void handleDropGemsStatus() {
         dropGems();
-        setStatus(MLMStatus.IDLE);
+        // Straight back to mining rather than via IDLE: dropping gems is a two-second housekeeping
+        // task, not a reason to re-evaluate the whole run.
+        setStatus(payDirtCount() > 0 && Rs2Inventory.isFull() ? MLMStatus.DEPOSIT_HOPPER : MLMStatus.MINING);
     }
 
     private void handleRecoveryStatus() {
@@ -2062,6 +2079,17 @@ public class IrkedMLMScript extends Script {
         return Rs2Inventory.contains(
                 ItemID.UNCUT_SAPPHIRE, ItemID.UNCUT_EMERALD,
                 ItemID.UNCUT_RUBY, ItemID.UNCUT_DIAMOND);
+    }
+
+    /**
+     * Drops uncut gems when the user asked for that. No-op while a gem bag is in use — the bag is
+     * then the whole point — or when there is nothing to drop.
+     */
+    private void dropGemsIfWanted() {
+        if (!config.dropGems() || config.useGemBag() || !hasGemsInInventory()) {
+            return;
+        }
+        dropGems();
     }
 
     private void dropGems() {
