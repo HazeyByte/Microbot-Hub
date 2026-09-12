@@ -338,7 +338,28 @@ public abstract class Session {
         if (now - lastUpperFloorCheckMs < UPPER_FLOOR_CACHE_MS) {
             return lastUpperFloorResult;
         }
-        boolean result = net.runelite.client.plugins.microbot.Microbot.getClientThread().runOnClientThreadOptional(() -> {
+        boolean result = playerOnUpperFloor();
+        lastUpperFloorCheckMs = now;
+        if (result != lastUpperFloorResult) {
+            log.debug("[Session] Floor changed: upper={}", result);
+        }
+        lastUpperFloorResult = result;
+        return result;
+    }
+
+    /**
+     * Uncached floor test, for callers outside a Session.
+     *
+     * <p>MLM's two levels are the <b>same plane</b> at different tile heights — the ladder's foot and
+     * head are two world tiles apart — so nothing derived from {@link net.runelite.api.coords.WorldPoint}
+     * can tell the floors apart. Anything that reasons about "which level is this on" must come
+     * through here.
+     */
+    public static boolean playerOnUpperFloor() {
+        if (!net.runelite.client.plugins.microbot.Microbot.isLoggedIn()) {
+            return false;
+        }
+        return net.runelite.client.plugins.microbot.Microbot.getClientThread().runOnClientThreadOptional(() -> {
             net.runelite.api.Client client = net.runelite.client.plugins.microbot.Microbot.getClient();
             if (client == null || client.getLocalPlayer() == null) return false;
             LocalPoint localLoc = client.getLocalPlayer().getLocalLocation();
@@ -346,12 +367,6 @@ public abstract class Session {
             int height = Perspective.getTileHeight(client, localLoc, 0);
             return height < UPPER_FLOOR_HEIGHT_THRESHOLD;
         }).orElse(false);
-        lastUpperFloorCheckMs = now;
-        if (result != lastUpperFloorResult) {
-            log.debug("[Session] Floor changed: upper={}", result);
-        }
-        lastUpperFloorResult = result;
-        return result;
     }
 
     public void invalidateUpperFloorCache() {

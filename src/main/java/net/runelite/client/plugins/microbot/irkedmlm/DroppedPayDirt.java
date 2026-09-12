@@ -24,16 +24,18 @@ public final class DroppedPayDirt {
     static final long COLLECT_TIMEOUT_MS = 30_000L;
 
     private WorldPoint where;
+    private boolean onUpperFloor;
     private int count;
     private long droppedAtMs;
     private long collectStartedMs;
 
     /** Records a drop. A second drop before the first is collected replaces the claim. */
-    public void note(WorldPoint at, int amount, long nowMs) {
+    public void note(WorldPoint at, boolean upperFloor, int amount, long nowMs) {
         if (amount <= 0) {
             return;
         }
         where = at;
+        onUpperFloor = upperFloor;
         count = amount;
         droppedAtMs = nowMs;
         collectStartedMs = 0L;
@@ -41,6 +43,7 @@ public final class DroppedPayDirt {
 
     public void clear() {
         where = null;
+        onUpperFloor = false;
         count = 0;
         droppedAtMs = 0L;
         collectStartedMs = 0L;
@@ -48,6 +51,16 @@ public final class DroppedPayDirt {
 
     public WorldPoint getWhere() {
         return where;
+    }
+
+    /**
+     * The MLM level the pile is on. Essential, not cosmetic: both levels are the same plane at
+     * different tile heights, so a pile dropped upstairs is only a dozen world tiles from the
+     * downstairs deposit box and looks reachable to any WorldPoint-based distance check. It isn't —
+     * it needs the ladder.
+     */
+    public boolean isOnUpperFloor() {
+        return onUpperFloor;
     }
 
     public int getCount() {

@@ -1221,7 +1221,9 @@ public class IrkedMLMScript extends Script {
         if (dropped > 0) {
             // Remember the pile so it can be picked back up once the sack is clear — that is several
             // minutes of mining lying on the floor, and a player would never just walk off from it.
-            droppedPayDirt.note(Rs2Player.getWorldLocation(), dropped, System.currentTimeMillis());
+            droppedPayDirt.note(Rs2Player.getWorldLocation(),
+                    net.runelite.client.plugins.microbot.irkedmlm.session.Session.playerOnUpperFloor(),
+                    dropped, System.currentTimeMillis());
         }
     }
 
@@ -1232,12 +1234,31 @@ public class IrkedMLMScript extends Script {
      */
     private boolean collectDroppedPayDirt() {
         long now = System.currentTimeMillis();
+
+        if (!droppedPayDirt.isPending(now)) {
+            droppedPayDirt.clear();
+            return false;
+        }
+
+        // Floor first, and it must be the height-based test: both MLM levels are the same plane, so a
+        // pile dropped upstairs sits only ~12 world tiles from the downstairs deposit box. Every
+        // WorldPoint distance check reads that as "right there", and Rs2GroundItem happily finds the
+        // pile in the loaded scene — so the bot stood on the lower floor clicking pay-dirt it could
+        // only reach by ladder, forever. If we are on the wrong level, do nothing and keep the claim:
+        // the run climbs back up to its mining spot on its own, and collection resumes there.
+        boolean upstairsNow = net.runelite.client.plugins.microbot.irkedmlm.session.Session.playerOnUpperFloor();
+        if (upstairsNow != droppedPayDirt.isOnUpperFloor()) {
+            debug("[MLM] Dropped pay-dirt is on the {} floor and we are on the {} — waiting until we are back there",
+                    droppedPayDirt.isOnUpperFloor() ? "upper" : "lower", upstairsNow ? "upper" : "lower");
+            return false;
+        }
+
         WorldPoint here = Rs2Player.getWorldLocation();
         WorldPoint pile = droppedPayDirt.getWhere();
         boolean nearPile = here != null && pile != null && here.distanceTo(pile) <= 12;
 
         if (!droppedPayDirt.shouldCollect(now, Rs2Inventory.emptySlotCount(), nearPile)) {
-            if (droppedPayDirt.isPending(now) && !nearPile) {
+            if (!nearPile) {
                 debug("[MLM] Dropped pay-dirt is out of range now — writing it off");
             }
             droppedPayDirt.clear();
