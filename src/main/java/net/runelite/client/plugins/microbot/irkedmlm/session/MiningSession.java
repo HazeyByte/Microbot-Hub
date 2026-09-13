@@ -85,7 +85,8 @@ public class MiningSession extends Session {
     private static final int REACHABLE_SEARCH_RADIUS = 14;
     private static final int REACHABLE_RECOMPUTE_DISTANCE = 6;
     private static final long REACHABLE_CACHE_MS = 3000L;
-    private Set<WorldPoint> reachableCache = null;
+    // volatile + immutable snapshot: the area overlay reads this from the render thread.
+    private volatile Set<WorldPoint> reachableCache = null;
     private WorldPoint reachableCacheOrigin = null;
     private long reachableCacheMs = 0L;
 
@@ -1435,7 +1436,14 @@ public class MiningSession extends Session {
         if (spot == null || playerLoc == null || veinLoc == null) {
             return true;
         }
-        Set<WorldPoint> reachable = reachableTilesFrom(playerLoc);
+        // Hard veto, checked FIRST and never overridden by reachability. These tiles are off-limits
+        // whether or not a rockfall currently seals them: rockfalls respawn, so walking in while one
+        // is open leaves us boxed in when it comes back. "Currently reachable" is not the same thing
+        // as "safe to enter", and this rule is about the second.
+        if (isPermanentRockfallBarrier(spot, veinLoc)) {
+            return true;
+        }
+        Set<WorldPoint> reachable = reachableTilesFrom(spot, playerLoc);
         if (reachable.isEmpty()) {
             // BFS unavailable (scene not loaded, client read failed). Fall back to the session's own
             // observed rockfalls rather than blocking everything, which would stall mining outright.
@@ -1449,6 +1457,50 @@ public class MiningSession extends Session {
         return true;
     }
 
+    /** How far outside the spot the walk may stray, purely to bridge in from where we are standing. */
+    private static final int SPOT_APPROACH_MARGIN = 3;
+
+    /**
+     * Re-walks the live-reachable set confined to the configured mining spot, so a vein only counts
+     * as reachable if we can get to it <b>without leaving the area</b>.
+     *
+     * <p>Containment is the rule, not a tile list. The upstream Motherlode plugin reaches the same
+     * conclusion — {@code MotherloadMineScript}: "Static areas for lower floor to avoid getting stuck
+     * behind rockfall". Rockfalls respawn, so anything outside the spot is somewhere we can be sealed
+     * into; whether it happens to be open right now is irrelevant. An earlier attempt vetoed the
+     * rockfall's own tiles instead, which does not work: that list is a scatter of tiles, not a wall,
+     * so with the rock cleared a path simply goes around it.
+     *
+     * <p>The small margin exists only so a walk that starts outside the area (stepping off the ladder)
+     * can bridge inward. Barrier tiles stay vetoed inside the margin, which is what keeps the bridge
+     * from becoming its own way into the corridor.
+     */
+    private Set<WorldPoint> confineToSpot(MLMMiningSpot spot, WorldPoint from, Set<WorldPoint> live) {
+        if (live.isEmpty() || spot == null) {
+            return live;
+        }
+        // The margin is only for bridging IN from outside. Once we are standing in the spot there is
+        // nothing to bridge, so confine strictly — otherwise the bubble hangs a few tiles over the
+        // area's edge for no reason, which is exactly the direction we do not want to drift.
+        final int margin = spot.contains(from) ? 0 : SPOT_APPROACH_MARGIN;
+
+        Set<WorldPoint> safe = new HashSet<>();
+        java.util.ArrayDeque<WorldPoint> queue = new java.util.ArrayDeque<>();
+        safe.add(from);
+        queue.add(from);
+        while (!queue.isEmpty()) {
+            WorldPoint p = queue.poll();
+            for (WorldPoint n : adjacentTiles(p)) {
+                if (safe.contains(n) || !live.contains(n)) continue;
+                if (IrkedMLMMapConstants.isRockfallBlockedTile(n)) continue;
+                if (!spot.contains(n) && n.distanceTo(from) > margin) continue;
+                safe.add(n);
+                queue.add(n);
+            }
+        }
+        return safe;
+    }
+
     /** Where a player stands to mine it; the vein's own tile is never walkable. */
     private static List<WorldPoint> adjacentTiles(WorldPoint p) {
         return Arrays.asList(
@@ -1459,7 +1511,7 @@ public class MiningSession extends Session {
     }
 
     /** Computed once and reused - selection asks about many veins per tick. */
-    private Set<WorldPoint> reachableTilesFrom(WorldPoint from) {
+    private Set<WorldPoint> reachableTilesFrom(MLMMiningSpot spot, WorldPoint from) {
         long now = System.currentTimeMillis();
         if (reachableCache != null
                 && reachableCacheOrigin != null
@@ -1467,8 +1519,9 @@ public class MiningSession extends Session {
                 && now - reachableCacheMs < REACHABLE_CACHE_MS) {
             return reachableCache;
         }
-        Set<WorldPoint> tiles = Rs2Tile.getReachableTilesFromTile(from, REACHABLE_SEARCH_RADIUS).keySet();
-        reachableCache = tiles;
+        Set<WorldPoint> live = Rs2Tile.getReachableTilesFromTile(from, REACHABLE_SEARCH_RADIUS).keySet();
+        Set<WorldPoint> tiles = confineToSpot(spot, from, live);
+        reachableCache = Collections.unmodifiableSet(new HashSet<>(tiles));
         reachableCacheOrigin = from;
         reachableCacheMs = now;
         return tiles;
@@ -1579,6 +1632,12 @@ public class MiningSession extends Session {
             return false;
         }
         return spot.contains(veinLoc);
+    }
+
+    /** Tiles the vein selector currently believes it can walk to, for the map overlay (read-only). */
+    public Set<WorldPoint> getReachableTilesView() {
+        Set<WorldPoint> snapshot = reachableCache;
+        return snapshot != null ? snapshot : Collections.emptySet();
     }
 
     /** Session rockfall tiles for map overlay (read-only). */
@@ -1779,8 +1838,21 @@ public class MiningSession extends Session {
         return best;
     }
 
-    // pathCrossesBarriers() and its static survey were removed - isVeinBarred() supersedes both.
-    // The survey constants remain in IrkedMLMMapConstants only for the area overlay's shading.
+    private static Set<WorldPoint> permanentRockfallBarriersFor(MLMMiningSpot spot) {
+        return IrkedMLMMapConstants.permanentRockfallBarriersFor(spot);
+    }
+
+    /**
+     * Tiles we never mine, whatever the collision map currently says. This is a safety rule about
+     * where it is safe to stand, not a description of what happens to be open — the two are different
+     * questions and only the barrier list answers the first.
+     */
+    private static boolean isPermanentRockfallBarrier(MLMMiningSpot spot, WorldPoint point) {
+        return point != null && permanentRockfallBarriersFor(spot).contains(point);
+    }
+
+    // The straight-line pathCrossesBarriers() test was removed; live reachability replaces it for the
+    // "can I get there" question. The barrier LIST is deliberately retained above as a hard veto.
 
     private boolean pathCrossesRockfallMemory(WorldPoint from, WorldPoint to) {
         if (from == null || to == null || rememberedRockfalls.isEmpty()) {

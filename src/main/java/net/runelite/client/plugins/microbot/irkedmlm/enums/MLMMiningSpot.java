@@ -60,11 +60,15 @@ public enum MLMMiningSpot {
             new WorldArea(3747, 5679, 7, 6, 0)
     ), westUpperPreferredOperatingTiles()),
 
+    // Height 7, not 6: measured against live vein positions, the chamber's northern row is y5675 and
+    // holds three of its eight veins — (3758,5675), (3761,5675), (3762,5675). At height 6 the spot saw
+    // only five and waited on respawns it did not need to. y5676 stays out: that is the corridor side,
+    // behind the rockfall.
     EAST_UPPER(Arrays.asList(
             new WorldPoint(3761, 5672, 0),
             new WorldPoint(3760, 5673, 0)
     ), true, Arrays.asList(
-            new WorldArea(3756, 5669, 7, 6, 0)
+            new WorldArea(3756, 5669, 7, 7, 0)
     ), eastUpperPreferredOperatingTiles());
 
     /** Navigation anchors (return-to-area targets). */

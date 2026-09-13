@@ -73,11 +73,9 @@ public interface IrkedMLMConfig extends Config
 	@ConfigSection(name = "Overlay",       description = "What the session panel shows",                position = 7)
 	String overlaySection = "overlay";
 
-	// The former "Advanced" section (Debug Mode, Show Mining Areas) is deliberately not shown in the
-	// config panel: both options are developer tooling. The config methods below are kept — and still
-	// honoured by the plugin — so the code paths stay live and can be re-exposed by removing
-	// `hidden = true`. ConfigSection has no hidden() attribute, hence removing the section outright
-	// rather than hiding it, which would leave an empty "Advanced" header behind.
+	// Debug Mode and Show Mining Areas are developer tooling and stay hidden from the config panel.
+	// The code paths remain live — set them in the config file, or drop `hidden = true`, to use the
+	// on-map area/reachability view when checking spot geometry against the real mine.
 
 	// General
 	@ConfigItem(
@@ -372,7 +370,7 @@ public interface IrkedMLMConfig extends Config
 	@ConfigItem(
 			keyName = showMiningAreas,
 			name = "Show Mining Areas",
-			description = "Draw selectable zone tiles (green) and rockfall-blocked tiles (red = static map, orange = session memory) on the game map for the configured/active mining spot.",
+			description = "Draw the configured spot on the game map: green = selectable zone, blue = tiles the bot believes it can walk to right now, red = rockfall-blocked (static), orange = rockfalls learned this session.",
 			position = 1,
 			hidden = true
 	)

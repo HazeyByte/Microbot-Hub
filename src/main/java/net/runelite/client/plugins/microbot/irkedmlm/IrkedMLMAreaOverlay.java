@@ -30,6 +30,9 @@ public class IrkedMLMAreaOverlay extends Overlay {
     private static final Color BLOCKED_OUTLINE = new Color(255, 60, 60, 220);
     private static final Color SESSION_BLOCKED_FILL = new Color(255, 140, 0, 90);
     private static final Color SESSION_BLOCKED_OUTLINE = new Color(255, 180, 0, 230);
+    /** What the vein selector believes it can actually walk to right now. */
+    private static final Color REACHABLE_FILL = new Color(0, 120, 255, 55);
+    private static final Color REACHABLE_OUTLINE = new Color(80, 180, 255, 200);
 
     private final Client client;
     private final IrkedMLMConfig config;
@@ -64,6 +67,11 @@ public class IrkedMLMAreaOverlay extends Overlay {
         }
         Set<WorldPoint> sessionBlocked = new HashSet<>(script.getRememberedRockfallTiles());
         sessionBlocked.removeAll(staticBlocked);
+
+        // Blue first, so the green area and red barriers draw over it and stay readable. Blue
+        // outside green is the approach margin; green with no blue is in-area but unreachable.
+        Set<WorldPoint> reachable = new HashSet<>(script.getReachableTiles());
+        renderTiles(graphics, reachable, REACHABLE_FILL, REACHABLE_OUTLINE);
 
         renderTiles(graphics, miningTiles, MINING_FILL, MINING_OUTLINE);
         renderTiles(graphics, staticBlocked, BLOCKED_FILL, BLOCKED_OUTLINE);

@@ -2531,6 +2531,11 @@ public class IrkedMLMScript extends Script {
         return miningSession.getRememberedRockfallsView();
     }
 
+    /** What the vein selector currently thinks it can walk to — drawn blue by the area overlay. */
+    public java.util.Set<WorldPoint> getReachableTiles() {
+        return miningSession.getReachableTilesView();
+    }
+
     private String getCurrentSubStateLabel() {
         switch (status) {
             case MINING:            return miningSession.getPhaseLabel();
