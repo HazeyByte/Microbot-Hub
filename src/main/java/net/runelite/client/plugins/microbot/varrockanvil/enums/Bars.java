@@ -3,68 +3,52 @@ package net.runelite.client.plugins.microbot.varrockanvil.enums;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import net.runelite.api.gameval.ItemID;
-import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 
-import java.util.Map;
 @Getter
 @RequiredArgsConstructor
 public enum Bars {
-    BRONZE("Bronze bar", ItemID.BRONZE_BAR, 1, Map.of(Ores.COPPER, 1, Ores.TIN, 1)),
-    BLURITE("Blurite bar", ItemID.BLURITE_BAR,  13, Map.of(Ores.BLURITE, 1)),
-    IRON("Iron bar", ItemID.IRON_BAR,  15, Map.of(Ores.IRON, 1)),
-    SILVER("Silver bar", ItemID.SILVER_BAR,  20, Map.of(Ores.SILVER, 1)),
-    STEEL("Steel bar", ItemID.STEEL_BAR,  30, Map.of(Ores.IRON, 1, Ores.COAL, 2)),
-    GOLD("Gold bar", ItemID.GOLD_BAR,  40, Map.of(Ores.GOLD, 1)),
-    MITHRIL("Mithril bar", ItemID.MITHRIL_BAR,  50, Map.of(Ores.MITHRIL, 1, Ores.COAL, 4)),
-    ADAMANTITE("Adamantite bar", ItemID.ADAMANTITE_BAR,  70, Map.of(Ores.ADAMANTITE, 1, Ores.COAL, 6)),
-    RUNITE("Runite bar", ItemID.RUNITE_BAR,  85, Map.of(Ores.RUNITE, 1, Ores.COAL, 8)),
-    MOLTEN_GLASS("Molten glass", ItemID.MOLTEN_GLASS,  1, Map.of(Ores.SODA_ASH, 1, Ores.BUCKET_OF_SAND, 1)),;;
+    // keelMetal is the word the game uses in Sailing keel item names, which is NOT always the bar's
+    // own name: an "Adamantite bar" makes "Adamant keel parts", a "Runite bar" makes "Rune keel parts".
+    // null means this metal has no keel parts at all.
+    //
+    // keelLevel / keelQuantity come from the OSRS Wiki keel tables and are per-tier — they are NOT the
+    // bar's own smelting level, and dragon takes 2 where every other tier takes 5.
+    //
+    //     name                  id                      smelt  keelMetal   keelLvl  keelQty
+    BRONZE("Bronze bar",         ItemID.BRONZE_BAR,      1,     "bronze",   10,      5),
+    IRON("Iron bar",             ItemID.IRON_BAR,        15,    "iron",     22,      5),
+    SILVER("Silver bar",         ItemID.SILVER_BAR,      20,    null,       0,       0),
+    STEEL("Steel bar",           ItemID.STEEL_BAR,       30,    "steel",    38,      5),
+    GOLD("Gold bar",             ItemID.GOLD_BAR,        40,    null,       0,       0),
+    MITHRIL("Mithril bar",       ItemID.MITHRIL_BAR,     50,    "mithril",  56,      5),
+    ADAMANTITE("Adamantite bar", ItemID.ADAMANTITE_BAR,  70,    "adamant",  74,      5),
+    RUNITE("Runite bar",         ItemID.RUNITE_BAR,      85,    "rune",     86,      5),
+
+    // Dragon is keel-only and large-keel-only. Regular Dragon keel parts come from 2 dragon metal
+    // sheets at the DRAGON FORGE, which no anvil can do — so this plugin rejects that pairing. Large
+    // dragon keel parts, however, are 2 Dragon keel parts at an ordinary anvil, which is fine here.
+    // The id is 0 because the material is matched by name ("Dragon keel parts"), never by bar id.
+    DRAGON("Dragon",             0,                      94,    "dragon",   94,      2);
 
     private final String name;
     private final int id;
     private final int requiredSmithingLevel;
-    private final Map<Ores, Integer> requiredMaterials;
+    private final String keelMetal;
+    private final int keelLevel;
+    private final int keelQuantity;
 
     @Override
     public String toString() {
         return name;
     }
-    public int getId() { return id; }
 
-    public int maxBarsForFullInventory() {
-        int amountForOneBar = requiredMaterials.values().stream().reduce(0, Integer::sum);
-        return Rs2Inventory.capacity() / amountForOneBar;
+    /** True if Sailing keel parts exist for this metal. */
+    public boolean hasKeelParts() {
+        return keelMetal != null;
     }
 
-    public Map<Ores, Integer> getWithdrawalsWithCoalBag(int totalInventorySlots) {
-        Map<Ores, Integer> result = new java.util.HashMap<>();
-
-        if (!requiredMaterials.containsKey(Ores.COAL)) {
-            return requiredMaterials.entrySet().stream()
-                    .collect(java.util.stream.Collectors.toMap(Map.Entry::getKey, e -> e.getValue()));
-        }
-        int invSlots = totalInventorySlots - 1;
-        int coalPerBar = requiredMaterials.get(Ores.COAL);
-        int totalMatsPerBar = requiredMaterials.values().stream().mapToInt(Integer::intValue).sum();
-        for (int bars = invSlots; bars > 0; bars--) {
-            int totalCoal = coalPerBar * bars;
-            int coalInInv = Math.max(0, totalCoal - 27);
-            int nonCoalMats = bars * totalMatsPerBar - totalCoal;
-            int totalUsed = coalInInv + nonCoalMats + 1;
-            if (totalUsed <= totalInventorySlots) {
-                for (Map.Entry<Ores, Integer> entry : requiredMaterials.entrySet()) {
-                    Ores ore = entry.getKey();
-                    int totalAmount = entry.getValue() * bars;
-
-                    if (ore == Ores.COAL) {
-                        result.put(ore, coalInInv); // only inv coal needed
-                    } else {
-                        result.put(ore, totalAmount);
-                    }
-                }
-                break;
-            }
-        }
-        return result;
+    /** Regular keel parts for this metal need the Dragon Forge, not an anvil. */
+    public boolean regularKeelNeedsDragonForge() {
+        return this == DRAGON;
     }
 }

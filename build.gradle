@@ -296,3 +296,11 @@ tasks.register('validateJdkVersion') {
         }
     }
 }
+
+tasks.register('runVarrockAnvilHammerCheck', JavaExec) {
+    group = 'verification'
+    description = 'Self-check: Varrock Anvil hammer set covers both Imcando variants.'
+    dependsOn 'testClasses'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'net.runelite.client.VarrockAnvilHammerCheck'
+}
