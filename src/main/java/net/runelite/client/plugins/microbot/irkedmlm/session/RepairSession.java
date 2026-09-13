@@ -378,7 +378,7 @@ public class RepairSession extends Session {
         }
 
         log.debug("[RepairSession] Searching crate (ID: {})", SUPPLY_CRATE_ID);
-        if (crate.click("Search")) {
+        if (clickOnMyFloor(crate, "Search")) {
             applyActionCooldown();
             crateSearchAttempts++;
             scheduleNextAdaptive(350L, 1000L);
@@ -505,7 +505,7 @@ public class RepairSession extends Session {
         }
 
         log.debug("[RepairSession] Repairing strut (ID: {})", targetStrutId);
-        if (target.click("Repair")) {
+        if (clickOnMyFloor(target, "Repair")) {
             applyActionCooldown();
             brokenBeforeClick   = countBrokenStruts();
             animStartObserved   = false;

@@ -26,6 +26,7 @@ import net.runelite.client.plugins.microbot.irkedmlm.session.HopperSession;
 import net.runelite.client.plugins.microbot.irkedmlm.session.MiningSession;
 import net.runelite.client.plugins.microbot.irkedmlm.session.RepairSession;
 import net.runelite.client.plugins.microbot.irkedmlm.session.SackSession;
+import net.runelite.client.plugins.microbot.irkedmlm.session.Session;
 import net.runelite.client.plugins.microbot.irkedmlm.session.SessionSnapshot;
 import net.runelite.client.plugins.microbot.util.antiban.Rs2Antiban;
 import net.runelite.client.plugins.microbot.util.antiban.Rs2AntibanSettings;
@@ -39,6 +40,7 @@ import net.runelite.client.plugins.microbot.util.bank.enums.BankLocation;
 import net.runelite.client.plugins.microbot.util.grounditem.Rs2GroundItem;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2ItemModel;
+import net.runelite.client.plugins.microbot.util.camera.Rs2Camera;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.settings.Rs2Settings;
@@ -343,6 +345,8 @@ public class IrkedMLMScript extends Script {
         gemBagEnsured                = false; // re-verify each run (singleton survives stop/start)
         preflightDone                = false; // one-shot startup gate re-runs each fresh start
         preflightBankVisitDone       = false; // Phase A (single bank session) not yet done this run
+        cameraFramed                 = false; // frame the camera once per run
+        cameraFrameDueMs             = 0L;
         effectiveDepositMethod       = config.depositMethod();
         startTimeMs                  = System.currentTimeMillis();
         // Re-baseline every run(): the script is a @Singleton whose instance survives stop/start, so a
@@ -560,6 +564,8 @@ public class IrkedMLMScript extends Script {
                 if (!runPreflight()) return; // still settling (withdraw/wield/lock) or stopped
                 preflightDone = true;
             }
+
+            frameCameraOnce();
 
             if (config.useGemBag()
                     && Rs2Gembag.isUnknown()
@@ -2565,6 +2571,61 @@ public class IrkedMLMScript extends Script {
         lastLoggedStatus = newStatus;
         statusEnteredMs = System.currentTimeMillis();
     }
+
+    /**
+     * Pull the camera back so the whole work area is on screen.
+     *
+     * <p>Not cosmetic: {@code ensureClickable()} turns the camera for any off-screen target, and
+     * {@code turnTo} forces 3x speed and blocks up to 5s. Framed wide, it stops firing — and a strut
+     * that will not frame cannot be repaired at all.
+     *
+     * <p>Once per run only. Must stay off the client thread: {@code setYaw} snaps instantly there.
+     */
+    private void frameCameraOnce() {
+        if (cameraFramed) {
+            return;
+        }
+        // Not on the first tick: a player gets going, then adjusts a few seconds later.
+        if (cameraFrameDueMs == 0L) {
+            cameraFrameDueMs = System.currentTimeMillis() + Rs2Random.between(4_000, 18_000);
+            return;
+        }
+        if (System.currentTimeMillis() < cameraFrameDueMs) {
+            return;
+        }
+        Session.Floor floor = Session.currentFloor();
+        if (floor == Session.Floor.UNKNOWN) {
+            return; // wait for a definite reading rather than framing blind
+        }
+        cameraFramed = true;
+        try {
+            // Lower value = further out; stepped like a scroll wheel.
+            int from = Rs2Camera.getZoom();
+            int targetZoom = Rs2Random.between(120, 200);
+            int notches = Rs2Random.between(3, 5);
+            for (int i = 1; i <= notches; i++) {
+                Rs2Camera.setZoom(from + Math.round((targetZoom - from) * (i / (float) notches)));
+                sleep(110, 190);
+            }
+
+            // adjustPitch holds the arrow key at the game's own speed; setPitch would whip via
+            // smoothTo. Kept below 1.0 or it holds the key for the full 5s timeout.
+            Rs2Camera.adjustPitch(Rs2Random.between(88, 96) / 100f);
+            sleep(150, 300);
+
+            // Near top-down and wide, yaw barely changes what is visible, so it can be random.
+            Rs2Camera.setYaw(Rs2Random.between(0, 2047));
+
+            log.info("[MLM] Camera framed on the {} floor (zoom {}, pitch {})",
+                    floor, Rs2Camera.getZoom(), Rs2Camera.getPitch());
+        } catch (Exception e) {
+            log.warn("[MLM] Could not frame the camera: {}", e.getMessage());
+        }
+    }
+
+    /** The camera is framed exactly once per run, a random few seconds in. */
+    private boolean cameraFramed = false;
+    private long cameraFrameDueMs = 0L;
 
     private void resetAllSessions() {
         miningSession.reset();

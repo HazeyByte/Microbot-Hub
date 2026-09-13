@@ -224,7 +224,7 @@ public class HopperSession extends Session {
                     break;
                 }
 
-                if (hopper.click("Deposit")) {
+                if (clickOnMyFloor(hopper, "Deposit")) {
                     log.info("[HopperSession] Deposit interaction sent");
                     applyActionCooldown();
                     // Wider human gap so repeated deposit clicks (retries) aren't metronomic.

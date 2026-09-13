@@ -298,10 +298,10 @@ public class SackSession extends Session {
                     // bare click() doesn't do what we expect on the sack object.
                     boolean actionTaken = false;
                     if (noProgressWithdraws > 4) {
-                        actionTaken = sack.click("Empty sack") || sack.click("Search");
+                        actionTaken = clickOnMyFloor(sack, "Empty sack") || clickOnMyFloor(sack, "Search");
                     }
                     if (!actionTaken) {
-                        actionTaken = sack.click();
+                        actionTaken = clickOnMyFloor(sack, null);
                     }
                     if (actionTaken) {
                         applyActionCooldown();
@@ -370,7 +370,7 @@ public class SackSession extends Session {
                     }
 
                     log.info("[SackSession] Opening deposit box (ID {})", DEPOSIT_BOX_ID);
-                    if (box.click("Deposit")) {
+                    if (clickOnMyFloor(box, "Deposit")) {
                         applyActionCooldown();
                         scheduleNext(1800L); // longer wait after click for interface to open
                     } else {

@@ -6,6 +6,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
@@ -78,6 +79,16 @@ public class MiningSession extends Session {
     private MiningSubState subState = MiningSubState.IDLE;
 
     @Getter
+    // The BFS runs on the client thread via a blocking invoke, so it must not run per tick. Not keyed
+    // on the exact tile: reachability belongs to the connected region, so a step is no reason to redo
+    // it. The TTL is what picks up a rockfall someone else mined.
+    private static final int REACHABLE_SEARCH_RADIUS = 14;
+    private static final int REACHABLE_RECOMPUTE_DISTANCE = 6;
+    private static final long REACHABLE_CACHE_MS = 3000L;
+    private Set<WorldPoint> reachableCache = null;
+    private WorldPoint reachableCacheOrigin = null;
+    private long reachableCacheMs = 0L;
+
     private WorldPoint targetVein;
 
     @Getter
@@ -116,7 +127,12 @@ public class MiningSession extends Session {
 
     /** Session-long memory of rockfall tiles. Even if another player mines a rockfall,
      *  we continue to treat those tiles as blocked for the remainder of the session. */
-    private final Set<WorldPoint> rememberedRockfalls = new HashSet<>();
+    /**
+     * Rebuilt each tick, not accumulated: it only ever added, so a rockfall someone mined stayed
+     * "blocked" all session. An immutable snapshot because the overlay reads it from the render
+     * thread - mutating it there threw ConcurrentModificationException and dropped the highlight.
+     */
+    private volatile Set<WorldPoint> rememberedRockfalls = Collections.emptySet();
 
     /** Veins that recently failed interaction (depleted, blocked, or click-failed).
      *  Key = vein WorldPoint, Value = timestamp of failure. */
@@ -169,7 +185,7 @@ public class MiningSession extends Session {
         hoverDoneThisBout = false;
         hoverEligibleAfterMs = 0L;
         lastAmbientAttentionMs = 0L;
-        rememberedRockfalls.clear();
+        rememberedRockfalls = Collections.emptySet();
         recentFailures.clear(); // full clear on reset (recovery/hard resolve) so stale per-vein blacklists don't prevent resolving
         // NOTE: afkExitSign is deliberately NOT reset here — reset() runs on mid-session recovery, and the
         // AFK park side must stay consistent for the whole login. It re-rolls per login in updatePersonality().
@@ -546,6 +562,31 @@ public class MiningSession extends Session {
         // localPlayerName is now pushed from IrkedMLMScript via updateCachedLocalPlayerName()
         // (no per-session client thread fetch here - reduces startup pressure + TimeoutExceptions)
 
+        // ---------------------------------------------------------------------
+        // Floor gate — must precede the switch, not live inside individual cases.
+        //
+        // MLM's two levels share x/y on plane 0 (the upper terrain is simply raised), so an upper
+        // vein is perfectly resolvable by WorldPoint from downstairs: findVeinAt() returns it, the
+        // click succeeds, and the player walks at those x/y on the LOWER level — into a wall. Only
+        // IDLE and WALKING used to check the floor, so a session that survived a deposit trip in
+        // SELECTED/CLICKED (see isCommitted()/isLocked() in IrkedMLMScript) resumed holding an
+        // upstairs target and clicked it from the bottom of the ladder. EAST_UPPER showed it most
+        // because its area overlaps the lower hub beside the ladder.
+        // ---------------------------------------------------------------------
+        if (subState != MiningSubState.TRANSITIONING_FLOOR) {
+            Session.Floor floor = Session.currentFloor();
+            if (floor == Session.Floor.UNKNOWN) {
+                log.debug("[MiningSession] Floor unknown - holding before touching a vein");
+                scheduleNextAdaptive(180L, 600L);
+                return;
+            }
+            if (isWrongFloor(spot)) {
+                targetVein = null; // chosen for the other level; must not survive the climb
+                transitionSub(MiningSubState.TRANSITIONING_FLOOR);
+                return;
+            }
+        }
+
         // Resolve the most recent XP timestamp from both local and global sources.
         long lastXpResolved = Math.max(lastXpTimestamp, globalLastXpTime.get());
 
@@ -561,10 +602,7 @@ public class MiningSession extends Session {
                     transitionSub(MiningSubState.SACK_FULL);
                     break;
                 }
-                if (isWrongFloor(spot)) {
-                    transitionSub(MiningSubState.TRANSITIONING_FLOOR);
-                    break;
-                }
+                // (Floor is gated for every sub-state before the switch — no check needed here.)
                 transitionSub(miningEntrySubState(spot));
                 break;
 
@@ -593,10 +631,7 @@ public class MiningSession extends Session {
 
             // -----------------------------------------------------------------
             case WALKING:
-                if (isWrongFloor(spot)) {
-                    transitionSub(MiningSubState.TRANSITIONING_FLOOR);
-                    break;
-                }
+                // (Floor gated before the switch.)
                 if (shouldSkipSpotWalk(spot)) {
                     transitionSub(MiningSubState.SELECTED);
                     break;
@@ -670,7 +705,7 @@ public class MiningSession extends Session {
                     scheduleNextAdaptive(180L, 600L);
                     break;
                 }
-                if (rockfall.click("Mine")) {
+                if (clickOnMyFloor(rockfall, "Mine")) {
                     applyActionCooldown();
                     scheduleNextAdaptive(350L, 1200L);
                 }
@@ -1179,7 +1214,7 @@ public class MiningSession extends Session {
      * Single Mine click path — updates timestamps and sub-state. Returns true if click was sent.
      */
     private boolean attemptMineClick(Rs2TileObjectModel vein, long now, String mode) {
-        if (vein == null || !vein.click("Mine")) {
+        if (vein == null || !clickOnMyFloor(vein, "Mine")) {
             return false;
         }
         lastMineClickMs  = now;
@@ -1226,17 +1261,17 @@ public class MiningSession extends Session {
                 .where(o -> isRockfall(o.getId()))
                 .toList();
 
+        Set<WorldPoint> rebuilt = new HashSet<>();
         for (Rs2TileObjectModel rock : current) {
             WorldPoint base = rock.getWorldLocation();
+            if (base == null) continue;
             for (int dx = 0; dx < 2; dx++) {
                 for (int dy = 0; dy < 2; dy++) {
-                    rememberedRockfalls.add(new WorldPoint(
-                            base.getX() + dx,
-                            base.getY() + dy,
-                            base.getPlane()));
+                    rebuilt.add(new WorldPoint(base.getX() + dx, base.getY() + dy, base.getPlane()));
                 }
             }
         }
+        rememberedRockfalls = Collections.unmodifiableSet(rebuilt);
     }
 
     // -----------------------------------------------------------------------
@@ -1282,13 +1317,21 @@ public class MiningSession extends Session {
         return here != null && spot.contains(here);
     }
 
+    /**
+     * The ladder lands a tile outside the chamber (top y5675, EAST_UPPER y5669-5674), so requiring
+     * spot.contains(here) sent every trip through WALKING first. Clicking a vein already walks us
+     * there. Safe only because isVeinBarred() now rules out veins behind a rockfall.
+     */
     private MiningSubState miningEntrySubState(MLMMiningSpot spot) {
         if (spot != null && spot.isUpstairs() && isUpperFloor()) {
             WorldPoint here = Rs2Player.getWorldLocation();
-            if (here == null || !spot.contains(here)) {
+            if (here == null) {
                 return MiningSubState.WALKING;
             }
-            return MiningSubState.SELECTED;
+            if (spot.contains(here) || !queryVeinsInSpot(spot).isEmpty()) {
+                return MiningSubState.SELECTED;
+            }
+            return MiningSubState.WALKING;
         }
         return MiningSubState.WALKING;
     }
@@ -1383,25 +1426,52 @@ public class MiningSession extends Session {
     }
 
     /**
-     * True when the vein or any direct path to it crosses a permanent blocked tile (e.g. rockfall lane)
-     * or session-remembered rockfall cells.
+     * True when we cannot walk to this vein. Asks the client's live scene collision (not the shipped
+     * web-walk map, which has a known MLM gap) instead of the old hand-written survey, whose
+     * EAST_UPPER tiles never even overlapped the spot area. Rockfalls are solid objects, so they are
+     * in those flags automatically and leave them when mined.
      */
     private boolean isVeinBarred(MLMMiningSpot spot, WorldPoint playerLoc, WorldPoint veinLoc) {
         if (spot == null || playerLoc == null || veinLoc == null) {
             return true;
         }
-        if (isPermanentRockfallBarrier(spot, veinLoc)) {
-            return true;
+        Set<WorldPoint> reachable = reachableTilesFrom(playerLoc);
+        if (reachable.isEmpty()) {
+            // BFS unavailable (scene not loaded, client read failed). Fall back to the session's own
+            // observed rockfalls rather than blocking everything, which would stall mining outright.
+            return pathCrossesRockfallMemory(playerLoc, veinLoc);
         }
-        return pathCrossesBarriers(spot, playerLoc, veinLoc);
+        for (WorldPoint beside : adjacentTiles(veinLoc)) {
+            if (reachable.contains(beside)) {
+                return false;
+            }
+        }
+        return true;
     }
 
-    private static Set<WorldPoint> permanentRockfallBarriersFor(MLMMiningSpot spot) {
-        return IrkedMLMMapConstants.permanentRockfallBarriersFor(spot);
+    /** Where a player stands to mine it; the vein's own tile is never walkable. */
+    private static List<WorldPoint> adjacentTiles(WorldPoint p) {
+        return Arrays.asList(
+                new WorldPoint(p.getX() + 1, p.getY(), p.getPlane()),
+                new WorldPoint(p.getX() - 1, p.getY(), p.getPlane()),
+                new WorldPoint(p.getX(), p.getY() + 1, p.getPlane()),
+                new WorldPoint(p.getX(), p.getY() - 1, p.getPlane()));
     }
 
-    private static boolean isPermanentRockfallBarrier(MLMMiningSpot spot, WorldPoint point) {
-        return point != null && permanentRockfallBarriersFor(spot).contains(point);
+    /** Computed once and reused - selection asks about many veins per tick. */
+    private Set<WorldPoint> reachableTilesFrom(WorldPoint from) {
+        long now = System.currentTimeMillis();
+        if (reachableCache != null
+                && reachableCacheOrigin != null
+                && reachableCacheOrigin.distanceTo(from) <= REACHABLE_RECOMPUTE_DISTANCE
+                && now - reachableCacheMs < REACHABLE_CACHE_MS) {
+            return reachableCache;
+        }
+        Set<WorldPoint> tiles = Rs2Tile.getReachableTilesFromTile(from, REACHABLE_SEARCH_RADIUS).keySet();
+        reachableCache = tiles;
+        reachableCacheOrigin = from;
+        reachableCacheMs = now;
+        return tiles;
     }
 
     /**
@@ -1489,15 +1559,18 @@ public class MiningSession extends Session {
         return ranked.isEmpty() ? null : ranked.get(0);
     }
 
+    /**
+     * Active veins we can actually walk to. The walkability filter used to be skipped for upper
+     * chambers, leaving the 7x6 box as the only test — so a vein sealed behind a rockfall was a valid
+     * pick. Reachability is correct on both floors now, so they need no special case.
+     */
     private List<Rs2TileObjectModel> queryVeinsInSpot(MLMMiningSpot spot) {
-        boolean upperChamber = usesUpperStandMiningRules(spot);
-        var query = tileCache.query()
+        WorldPoint playerLoc = Rs2Player.getWorldLocation();
+        return tileCache.query()
                 .where(o -> isActiveVein(o)
-                        && isVeinInSelectableZone(spot, o.getWorldLocation()));
-        if (!upperChamber) {
-            query = query.where(o -> Rs2Tile.areSurroundingTilesWalkable(o.getWorldLocation(), 1, 1));
-        }
-        return query.toList();
+                        && isVeinInSelectableZone(spot, o.getWorldLocation())
+                        && !isVeinBarred(spot, playerLoc, o.getWorldLocation()))
+                .toList();
     }
 
     /** Veins must be inside spot {@link WorldArea} union (safe/selectable zones). */
@@ -1510,7 +1583,7 @@ public class MiningSession extends Session {
 
     /** Session rockfall tiles for map overlay (read-only). */
     public Set<WorldPoint> getRememberedRockfallsView() {
-        return Collections.unmodifiableSet(rememberedRockfalls);
+        return rememberedRockfalls; // already an immutable snapshot
     }
 
     /**
@@ -1706,29 +1779,8 @@ public class MiningSession extends Session {
         return best;
     }
 
-    private boolean pathCrossesBarriers(MLMMiningSpot spot, WorldPoint from, WorldPoint to) {
-        if (from == null || to == null) {
-            return true;
-        }
-        for (WorldPoint blocked : permanentRockfallBarriersFor(spot)) {
-            if (pathCrossesTile(from, to, blocked)) {
-                return true;
-            }
-        }
-        if (spot != null && spot.isUpstairs()) {
-            for (WorldPoint rock : IrkedMLMMapConstants.SHARED_UPPER_ROCKFALL_TILES) {
-                if (pathCrossesTile(from, to, rock)) {
-                    return true;
-                }
-            }
-            for (WorldPoint approach : IrkedMLMMapConstants.SHARED_UPPER_ROCKFALL_APPROACH_TILES) {
-                if (pathCrossesTile(from, to, approach)) {
-                    return true;
-                }
-            }
-        }
-        return pathCrossesRockfallMemory(from, to);
-    }
+    // pathCrossesBarriers() and its static survey were removed - isVeinBarred() supersedes both.
+    // The survey constants remain in IrkedMLMMapConstants only for the area overlay's shading.
 
     private boolean pathCrossesRockfallMemory(WorldPoint from, WorldPoint to) {
         if (from == null || to == null || rememberedRockfalls.isEmpty()) {

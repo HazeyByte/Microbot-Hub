@@ -86,9 +86,13 @@ public abstract class Session {
     // Same pattern as script's varbit/XP caches to avoid TimeoutException
     // spam and breakhandler modals when client thread is busy (startup, events).
     // ------------------------------------------------------------------
-    private long lastUpperFloorCheckMs = 0L;
-    private boolean lastUpperFloorResult = false;
+    // STATIC: one player, one floor. Per-instance caches let sessions disagree after a climb.
+    private static volatile long lastUpperFloorCheckMs = 0L;
+    private static volatile Floor lastFloorResult = Floor.UNKNOWN;
     private static final long UPPER_FLOOR_CACHE_MS = 1200L; // ~2 ticks, floor doesn't flip often
+
+    /** UNKNOWN means the client read failed — callers must wait, not guess. */
+    public enum Floor { LOWER, UPPER, UNKNOWN }
 
     // ------------------------------------------------------------------
     // Player name cache (pushed from script; sessions never do their own client thread fetch)
@@ -327,24 +331,32 @@ public abstract class Session {
     // Floor helpers
     // ------------------------------------------------------------------
 
-    /** Returns true if the player is on the upper floor of MLM. */
-    protected boolean isUpperFloor() {
+    /** Authoritative floor, shared by all sessions. A failed read is never cached. */
+    public static Floor currentFloor() {
         if (!net.runelite.client.plugins.microbot.Microbot.isLoggedIn()) {
             // Early exit avoids queuing client thread work during login and other blocking events,
             // which otherwise produces TimeoutException and breakhandler spam at startup.
-            return false;
+            return Floor.UNKNOWN;
         }
         long now = System.currentTimeMillis();
-        if (now - lastUpperFloorCheckMs < UPPER_FLOOR_CACHE_MS) {
-            return lastUpperFloorResult;
+        if (lastFloorResult != Floor.UNKNOWN && now - lastUpperFloorCheckMs < UPPER_FLOOR_CACHE_MS) {
+            return lastFloorResult;
         }
-        boolean result = playerOnUpperFloor();
+        Floor result = readFloor();
+        if (result == Floor.UNKNOWN) {
+            return Floor.UNKNOWN;
+        }
         lastUpperFloorCheckMs = now;
-        if (result != lastUpperFloorResult) {
-            log.debug("[Session] Floor changed: upper={}", result);
+        if (result != lastFloorResult) {
+            log.debug("[Session] Floor changed: {}", result);
         }
-        lastUpperFloorResult = result;
+        lastFloorResult = result;
         return result;
+    }
+
+    /** Returns true if the player is on the upper floor of MLM. UNKNOWN reads as lower — see {@link Floor}. */
+    protected boolean isUpperFloor() {
+        return currentFloor() == Floor.UPPER;
     }
 
     /**
@@ -356,21 +368,64 @@ public abstract class Session {
      * through here.
      */
     public static boolean playerOnUpperFloor() {
-        if (!net.runelite.client.plugins.microbot.Microbot.isLoggedIn()) {
-            return false;
-        }
-        return net.runelite.client.plugins.microbot.Microbot.getClientThread().runOnClientThreadOptional(() -> {
-            net.runelite.api.Client client = net.runelite.client.plugins.microbot.Microbot.getClient();
-            if (client == null || client.getLocalPlayer() == null) return false;
-            LocalPoint localLoc = client.getLocalPlayer().getLocalLocation();
-            if (localLoc == null) return false;
-            int height = Perspective.getTileHeight(client, localLoc, 0);
-            return height < UPPER_FLOOR_HEIGHT_THRESHOLD;
-        }).orElse(false);
+        return currentFloor() == Floor.UPPER;
     }
 
+    /**
+     * Terrain height is the actual mechanic, not a heuristic: MLM's upper level is raised ground on
+     * the same plane, so there is no plane, region or varbit to read. Matches RuneLite's own
+     * MotherlodePlugin.isUpstairs (UPPER_FLOOR_HEIGHT = -490).
+     */
+    private static Floor readFloor() {
+        return net.runelite.client.plugins.microbot.Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            net.runelite.api.Client client = net.runelite.client.plugins.microbot.Microbot.getClient();
+            if (client == null || client.getLocalPlayer() == null) return Floor.UNKNOWN;
+            LocalPoint localLoc = client.getLocalPlayer().getLocalLocation();
+            if (localLoc == null) return Floor.UNKNOWN;
+            int height = Perspective.getTileHeight(client, localLoc, 0);
+            return height < UPPER_FLOOR_HEIGHT_THRESHOLD ? Floor.UPPER : Floor.LOWER;
+        }).orElse(Floor.UNKNOWN);
+    }
+
+    /** Which level an object sits on. A given (x,y) belongs to one level or the other, never both. */
+    public static Floor floorOf(Rs2TileObjectModel model) {
+        if (model == null) return Floor.UNKNOWN;
+        return net.runelite.client.plugins.microbot.Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            net.runelite.api.Client client = net.runelite.client.plugins.microbot.Microbot.getClient();
+            if (client == null) return Floor.UNKNOWN;
+            LocalPoint lp = model.getLocalLocation();
+            if (lp == null) return Floor.UNKNOWN;
+            return Perspective.getTileHeight(client, lp, 0) < UPPER_FLOOR_HEIGHT_THRESHOLD
+                    ? Floor.UPPER : Floor.LOWER;
+        }).orElse(Floor.UNKNOWN);
+    }
+
+    /**
+     * The gate for every world-object click: is this thing on my level? Refuses rather than guess.
+     * The ladder is the one deliberate exception — spanning levels is its job.
+     */
+    protected boolean clickOnMyFloor(Rs2TileObjectModel model, String action) {
+        if (model == null) return false;
+        Floor mine = currentFloor();
+        Floor theirs = floorOf(model);
+        if (mine == Floor.UNKNOWN || theirs == Floor.UNKNOWN) {
+            log.debug("[Session] Refusing click on {}: floor unknown (me={}, target={})",
+                    model.getId(), mine, theirs);
+            return false;
+        }
+        if (mine != theirs) {
+            log.warn("[Session] Refusing click on {} at {}: it is on the {} level and I am on the {} — "
+                            + "clicking would walk me into a wall",
+                    model.getId(), model.getWorldLocation(), theirs, mine);
+            return false;
+        }
+        return (action == null || action.isEmpty()) ? model.click() : model.click(action);
+    }
+
+    /** Drop the shared reading — call after a ladder climb. */
     public void invalidateUpperFloorCache() {
         lastUpperFloorCheckMs = 0L;
+        lastFloorResult = Floor.UNKNOWN;
     }
 
     /** Canvas edge inset (px) applied before measuring how much of a clickbox is on-screen. */
@@ -379,17 +434,6 @@ public abstract class Session {
      *  trust a sampled click point to land on it. See {@link #hasSafeClickbox(Rs2TileObjectModel)}. */
     private static final double MIN_ONSCREEN_CLICKBOX_FRACTION = 0.5;
 
-    /** Camera swings tried to slide a target out from behind an open deposit box before we just
-     *  close the panel instead. */
-    private static final int MAX_PANEL_REVEAL_SWINGS = 2;
-    /** Degrees off dead centre to swing when the panel is covering the target. */
-    private static final int PANEL_REVEAL_YAW_OFFSET = 55;
-    /** Tolerance handed to {@link Rs2Camera#setAngle}; tight enough that the swing actually happens. */
-    private static final int PANEL_REVEAL_YAW_TOLERANCE = 8;
-
-    /** How many swings we have already tried for the current target. Reset on a successful check. */
-    private int panelRevealSwings = 0;
-
     /** Consecutive camera turns that failed to produce a clickable box for the current target. */
     private int clickboxTurnAttempts = 0;
     /** Turns to try before concluding the problem is zoom rather than angle. */
@@ -397,7 +441,9 @@ public abstract class Session {
     /** How far to pull the camera back per step, and the closest we will ever leave it. */
     private static final int ZOOM_OUT_STEP_MIN = 90;
     private static final int ZOOM_OUT_STEP_MAX = 170;
-    private static final int MIN_ZOOM = 200;
+    // Lower = further out. 200 was resetZoom()'s normal working zoom, not a floor — a strut that
+    // would not frame at 200 could never be framed, so repairs failed when zoomed in.
+    private static final int MIN_ZOOM = 110;
 
     /**
      * A pre-click sanity check {@link Rs2Camera#isTileOnScreen} does not give: isTileOnScreen only
@@ -479,7 +525,6 @@ public abstract class Session {
             return false;
         }
         if (hasSafeClickbox(model)) {
-            panelRevealSwings = 0;
             clickboxTurnAttempts = 0;
             return true;
         }
@@ -500,21 +545,11 @@ public abstract class Session {
             zoomOutAStep();
             return false;
         }
-        // Panel is covering the target. Swing the camera off dead centre so the object sits beside the
-        // panel instead of behind it — what a player does when they want to keep the box open.
-        if (++panelRevealSwings > MAX_PANEL_REVEAL_SWINGS) {
-            // ponytail: in fixed mode the panel is nearly as wide as the viewport, so no camera angle
-            // can clear it. Stop fighting and close the box — still a legitimate human action.
-            log.debug("[Session] Camera cannot clear the deposit box panel — closing it instead");
-            panelRevealSwings = 0;
-            Rs2DepositBox.closeDepositBox();
-            return false;
-        }
-        int sign   = (panelRevealSwings % 2 == 0) ? -1 : 1;
-        int target = (Rs2Camera.getTileAngle(model) + sign * PANEL_REVEAL_YAW_OFFSET + 360) % 360;
-        log.debug("[Session] Target behind deposit box panel — swinging camera to {}deg (attempt {})",
-                target, panelRevealSwings);
-        Rs2Camera.setAngle(target, PANEL_REVEAL_YAW_TOLERANCE);
+        // Close it rather than swinging the camera: in fixed mode the panel is nearly viewport-wide
+        // so swings rarely cleared it, and the retry counter reset each pass — that was the camera
+        // spinning all through EMPTY_SACK. The box is reopened next pass anyway.
+        log.debug("[Session] Target behind the deposit box panel — closing the box");
+        Rs2DepositBox.closeDepositBox();
         return false;
     }
 
@@ -738,6 +773,8 @@ public abstract class Session {
 
         scheduleNext(ladderHesitationMs());
 
+        // The one click that deliberately bypasses clickOnMyFloor(): a ladder is always on the floor
+        // we are leaving, so gating it would make climbing impossible. Do not "fix" this to match.
         if (ladder.click(action)) {
             log.info("[Session] {} ladder", action);
             noteLadderClick();
@@ -768,7 +805,6 @@ public abstract class Session {
         // NOTE: the ladder climb guard is deliberately NOT cleared — it is static and tracks a click
         // that has already gone to the server. Clearing it on a mid-climb session handover is exactly
         // how the second click got through.
-        panelRevealSwings = 0;
         clickboxTurnAttempts = 0;
     }
 
