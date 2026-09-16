@@ -26,6 +26,7 @@ import net.runelite.client.plugins.microbot.util.camera.Rs2Camera;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 
 import java.awt.event.KeyEvent;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.TimeUnit;
 
@@ -139,14 +140,10 @@ public class VarrockAnvilScript extends Script {
     private long stateEnteredMs = 0;
     private boolean cameraSettled = false;
     private int xpReadAttempts = 0;
-    private final java.util.concurrent.atomic.AtomicBoolean executing =
-            new java.util.concurrent.atomic.AtomicBoolean(false);
+    private final AtomicBoolean executing = new AtomicBoolean(false);
 
-    // -------------------------------------------------------------------------
-    // Overlay tracking fields
-    // -------------------------------------------------------------------------
-    private long startTime = 0;                 // set when player & client are ready
-    private int startXp = -1;                   // sentinel: -1 == not captured yet
+    private long startTime = 0;
+    private int startXp = -1;   // -1 == not captured yet
     private final AtomicInteger itemsMade = new AtomicInteger(0);
     @Getter
     private volatile boolean running = false;
@@ -172,7 +169,6 @@ public class VarrockAnvilScript extends Script {
         consecutiveRecoveries = 0;
         ctx.resetAll();
 
-        // Reject impossible combinations before walking anywhere.
         String rejection = rejectionReason(config.sBarType(), config.sAnvilItem());
         if (rejection != null) {
             Microbot.log("VarrockAnvil cannot start: " + rejection);
@@ -180,8 +176,6 @@ public class VarrockAnvilScript extends Script {
             return false;
         }
 
-        // Reset overlay tracking
-        // startTime/startXp captured once client & player are available (to avoid huge initial XP/hr spikes)
         itemsMade.set(0);
         running = true;
 
@@ -252,7 +246,6 @@ public class VarrockAnvilScript extends Script {
         // Must come before anything else: nothing can be clicked until this screen is gone.
         if (dismissWelcomeScreen()) return;
 
-        // Capture starting XP and start time once client+player are present
         if (startXp < 0) {
             try {
                 // One read per tick; busy-looping here stalled the first tick for ~1s.
@@ -303,9 +296,6 @@ public class VarrockAnvilScript extends Script {
 
         Bars barType = this.config.sBarType();
         AnvilItem anvilItem = this.config.sAnvilItem();
-
-        // (Smithing level is checked once in runPreflight — it cannot change mid-session in a
-        // way that invalidates the bar, and re-checking every tick only added log noise.)
 
         if (Rs2Dialogue.hasContinue()) {
             Rs2Dialogue.clickContinue();
@@ -379,8 +369,6 @@ public class VarrockAnvilScript extends Script {
             if (framed) {
                 info("Camera set: bank and anvil both in view (zoom " + zoom + ", pitch " + pitch + ")");
             } else {
-                // Honest about it rather than pretending — the client will still turn to targets,
-                // which is the behaviour this was meant to avoid.
                 info("Camera set, but bank and anvil do not both fit (zoom " + zoom
                         + ", pitch " + pitch + ") — the client may still turn to reach them");
             }
@@ -521,10 +509,6 @@ public class VarrockAnvilScript extends Script {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // DETERMINE
-    // -------------------------------------------------------------------------
-
     private State doDetermine(Bars barType, AnvilItem anvilItem) {
         if (Rs2Bank.isOpen()) {
             debug("Determine: bank is open, closing first");
@@ -545,10 +529,6 @@ public class VarrockAnvilScript extends Script {
             return State.BANKING;
         }
     }
-
-    // -------------------------------------------------------------------------
-    // BANKING
-    // -------------------------------------------------------------------------
 
     private State doBanking(Bars barType, AnvilItem anvilItem) {
         ctx.resetSession();
@@ -572,7 +552,6 @@ public class VarrockAnvilScript extends Script {
         int distToBank = playerLoc.distanceTo(BANK_LOCATION);
         debug("Attempt direct bank click, dist=" + distToBank);
 
-        // Small randomized pause to reduce fingerprintability
         sleepGaussian(250, 120);
 
         if (!interactWithBank()) {
@@ -678,7 +657,6 @@ public class VarrockAnvilScript extends Script {
             int finalMatCount = useName ? Rs2Inventory.count(matName) : Rs2Inventory.count(id);
             if (finalMatCount >= matsPerItem) {
                 debug("Banking complete -> DETERMINE (mats now " + finalMatCount + ")");
-                // Random post-bank pause — simulates glancing at inventory before moving
                 sleepGaussian(700, 200);
                 return State.DETERMINE;
             } else {
@@ -690,10 +668,6 @@ public class VarrockAnvilScript extends Script {
             return State.BANKING;
         }
     }
-
-    // -------------------------------------------------------------------------
-    // SMITHING
-    // -------------------------------------------------------------------------
 
     private State doSmithing(Bars barType, AnvilItem anvilItem) {
         if (Rs2Bank.isOpen()) {
@@ -707,13 +681,11 @@ public class VarrockAnvilScript extends Script {
         int currentMat = mat.useName ? Rs2Inventory.count(mat.name) : Rs2Inventory.count(mat.id);
         int req = getEffectiveRequiredBars(anvilItem, barType);
 
-        // Active session monitoring
         if (ctx.lastMakeStarted > 0) {
             if (currentMat < req) {
                 info("Finished a load (" + ctx.maxFullItems + " x " + getEffectiveItemName(anvilItem, barType) + ")");
                 itemsMade.addAndGet(ctx.maxFullItems);
                 ctx.resetSession();
-                // Random reaction delay before walking to bank
                 sleepGaussian(550, 175);
                 return State.DETERMINE;
             }
@@ -740,12 +712,10 @@ public class VarrockAnvilScript extends Script {
             debug("Done: no animation + no XP drop");
             itemsMade.addAndGet(ctx.maxFullItems);
             ctx.resetSession();
-            // Random reaction delay before walking to bank
             sleepGaussian(550, 175);
             return State.DETERMINE;
         }
 
-        // No active session — start one
         debug("Smithing: no active session, mats=" + currentMat + "/" + req + ", nearAnvil=" + isNearAnvil());
 
         if (currentMat < req) {
@@ -767,7 +737,6 @@ public class VarrockAnvilScript extends Script {
         WorldPoint here = Rs2Player.getWorldLocation();
         debug("Attempt direct anvil click, dist=" + (here != null ? here.distanceTo(ANVIL_LOCATION) : -1));
 
-        // Small randomized pause before interacting with anvil
         sleepGaussian(200, 100);
 
         if (!interactWithAnvil()) {
@@ -793,7 +762,6 @@ public class VarrockAnvilScript extends Script {
         if (widgetOpen || continues > 0) {
             String effectiveName = getEffectiveItemName(anvilItem, barType);
 
-            // Space repeat for already-selected item
             if (ctx.selectionComplete && itemKey.equals(ctx.lastSelectedItem)) {
                 Rs2Keyboard.keyPress(KeyEvent.VK_SPACE);
                 int fullItems = slotsForMaterials() / getEffectiveRequiredBars(anvilItem, barType);
@@ -839,10 +807,6 @@ public class VarrockAnvilScript extends Script {
         return State.RECOVERY;
     }
 
-    // -------------------------------------------------------------------------
-    // RECOVERY
-    // -------------------------------------------------------------------------
-
     private State doRecovery() {
         ctx.resetSession();
 
@@ -882,10 +846,6 @@ public class VarrockAnvilScript extends Script {
         return State.DETERMINE;
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
-
     /** Deposit-All exclusion list: every hammer variant, plus any extra ids (the material). */
     public static Integer[] keepOnDeposit(boolean hammerEquipped, int... extraIds) {
         // A hammer in the equipment slot already smiths, so any hammer in the inventory is dead
@@ -898,7 +858,6 @@ public class VarrockAnvilScript extends Script {
         return keep;
     }
 
-    /** True if this item id is a hammer that can actually smith. */
     public static boolean isHammer(int id) {
         for (int hammerId : HAMMER_IDS) {
             if (hammerId == id) return true;
@@ -906,12 +865,10 @@ public class VarrockAnvilScript extends Script {
         return false;
     }
 
-    /** True if a usable hammer is held, in the inventory or equipped. */
     private boolean hasHammer() {
         return Rs2Inventory.hasItem(HAMMER_IDS) || Rs2Equipment.isWearing(HAMMER_IDS);
     }
 
-    /** True only if the hammer occupies an inventory slot — an equipped one frees that slot for materials. */
     private boolean hammerInInventory() {
         return Rs2Inventory.hasItem(HAMMER_IDS);
     }
@@ -1070,16 +1027,12 @@ public class VarrockAnvilScript extends Script {
         Rs2Antiban.resetAntibanSettings();
     }
 
-    // -------------------------------------------------------------------------
-    // Overlay tracking getters
-    // -------------------------------------------------------------------------
-
     public long getElapsedTime() {
         return startTime > 0 ? System.currentTimeMillis() - startTime : 0;
     }
 
     public int getXpGained() {
-        if (startXp < 0) return 0; // not captured yet
+        if (startXp < 0) return 0;
         if (!Microbot.isLoggedIn() || Microbot.getClient() == null) return 0;
         return Math.max(0, Microbot.getClient().getSkillExperience(Skill.SMITHING) - startXp);
     }
@@ -1088,8 +1041,7 @@ public class VarrockAnvilScript extends Script {
         int gained = getXpGained();
         if (gained <= 0) return 0;
         long elapsed = getElapsedTime();
-        // avoid showing inflated rates during the first few seconds after start
-        if (elapsed < 5000) return 0;
+        if (elapsed < 5000) return 0;   // first seconds inflate the rate
         double hours = elapsed / 3600000.0;
         return (int) (gained / hours);
     }
@@ -1102,10 +1054,6 @@ public class VarrockAnvilScript extends Script {
     public String getTargetName() {
         return config == null ? "-" : getEffectiveItemName(config.sAnvilItem(), config.sBarType());
     }
-
-    // -------------------------------------------------------------------------
-    // Keel / material helpers
-    // -------------------------------------------------------------------------
 
     /**
      * The item name as the anvil interface spells it.
@@ -1169,11 +1117,7 @@ public class VarrockAnvilScript extends Script {
         return null;
     }
 
-
     private MatContext getMatContext(Bars bar, AnvilItem item) {
         return new MatContext(getMaterialName(bar, item), useNameForMaterial(bar, item), bar.getId());
     }
-
-
-
 }
