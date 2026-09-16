@@ -69,7 +69,7 @@ Use at your own risk.
 ---
 
 ## Changelog
-### 1.3.3
+### 1.0.4
 - **Click through the welcome screen.** The "Click here to play" screen (widget 378) sits on top of a session the client already reports as `LOGGED_IN`, so the script thought it was in-game and every click landed on the overlay.
 - **Fix the startup lag**, which was self-inflicted. The camera moved in 3–6 hops per axis and each `Rs2Camera` move is already 10 blocking client-thread steps internally, so framing cost hundreds of round trips; the visibility check re-resolved both tiles and ran three times per loop pass; and the XP capture busy-looped six times with `Thread.sleep(150)` between blocking reads, stalling the first tick for ~1s.
 - Tiles are now resolved once, the visibility check runs once per pass, the initial framing is two eased moves per axis, corrections are single nudges, and the XP read retries across ticks instead of blocking inside one.
