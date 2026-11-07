@@ -1,0 +1,645 @@
+{
+ "source": "live click-through 2026-11-01 (fresh F2P account) + osrs cache + OSRS wiki",
+ "npc": {
+  "name": "Adventurer Jon",
+  "id": 9244,
+  "tile": [
+   3232,
+   3235,
+   0
+  ],
+  "actions": [
+   "Talk-to",
+   "Claim",
+   "Open Adventure Paths"
+  ],
+  "talk_options": [
+   "What are Adventure Paths?",
+   "Do you have any Adventure Path starter kits for me?",
+   "I'd like to claim my Adventure Path rewards.",
+   "Can you show me some Adventure Paths?",
+   "Disable Adventure Paths."
+  ]
+ },
+ "interfaces": {
+  "journal_entry": "629:26",
+  "main": 642,
+  "reward": 643,
+  "side": 644
+ },
+ "varbits": {
+  "participating": 9340,
+  "path_in_focus": 9324,
+  "combat_task_focus": 9325,
+  "combat_task_recommended": 9326,
+  "gatherer_task_focus": 10158,
+  "gatherer_task_recommended": 10159,
+  "main_if_tab": 9328,
+  "combat": 9341,
+  "gatherer": 10163,
+  "warrior": 10517,
+  "wizard": 10518,
+  "ranger": 10519
+ },
+ "path_in_focus_values": {
+  "0": "Combat",
+  "1": "Gatherer",
+  "2047": "none"
+ },
+ "paths": {
+  "combat": {
+   "tasks": [
+    {
+     "name": "Getting started with Attack",
+     "description": "Reach level 5 in the Attack skill.",
+     "skill": "Attack",
+     "level": 5,
+     "varbits": {
+      "completed": 10174,
+      "reward_f2p": 10175,
+      "reward_p2p": 10176
+     },
+     "reward_free": [
+      {
+       "id": 1295,
+       "qty": 1
+      }
+     ],
+     "reward_members": [
+      {
+       "id": 995,
+       "qty": 500
+      }
+     ],
+     "hints": [
+      "Ensure your combat style is set to provide Attack XP. The Men, Chickens and Goblins near Lumbridge are suitable targets to fight."
+     ]
+    },
+    {
+     "name": "Getting a grip on it",
+     "description": "Reach level 10 in the Attack skill.",
+     "skill": "Attack",
+     "level": 10,
+     "varbits": {
+      "completed": 10177,
+      "reward_f2p": 10178,
+      "reward_p2p": 10179
+     },
+     "reward_free": [
+      {
+       "id": 1297,
+       "qty": 1
+      }
+     ],
+     "reward_members": [
+      {
+       "id": 995,
+       "qty": 500
+      }
+     ],
+     "hints": [
+      "Ensure your combat style is set to provide Attack XP. Cows and Farmers around Lumbridge are suitable targets to fight."
+     ]
+    },
+    {
+     "name": "Weapons master",
+     "description": "Reach level 20 in the Attack skill.",
+     "skill": "Attack",
+     "level": 20,
+     "varbits": {
+      "completed": 10180,
+      "reward_f2p": 10181,
+      "reward_p2p": 10182
+     },
+     "reward_free": [
+      {
+       "id": 1299,
+       "qty": 1
+      }
+     ],
+     "reward_members": [
+      {
+       "id": 995,
+       "qty": 1000
+      }
+     ],
+     "hints": [
+      "Ensure your combat style is set to provide Attack XP. The Barbarians south of Edgeville are suitable targets to fight."
+     ]
+    },
+    {
+     "name": "Getting started with Strength",
+     "description": "Reach level 5 in the Strength skill.",
+     "skill": "Strength",
+     "level": 5,
+     "varbits": {
+      "completed": 10183,
+      "reward_f2p": 10184,
+      "reward_p2p": 10185
+     },
+     "reward_free": [
+      {
+       "id": 333,
+       "qty": 5
+      },
+      {
+       "id": 1061,
+       "qty": 1
+      },
+      {
+       "id": 1059,
+       "qty": 1
+      }
+     ],
+     "reward_members": [
+      {
+       "id": 333,
+       "qty": 10
+      },
+      {
+       "id": 113,
+       "qty": 1
+      }
+     ],
+     "hints": [
+      "Ensure your combat style is set to provide Strength XP. The Men, Chickens and Goblins near Lumbridge are suitable targets to fight."
+     ]
+    },
+    {
+     "name": "Building muscle",
+     "description": "Reach level 10 in the Strength skill.",
+     "skill": "Strength",
+     "level": 10,
+     "varbits": {
+      "completed": 10186,
+      "reward_f2p": 10187,
+      "reward_p2p": 10188
+     },
+     "reward_free": [
+      {
+       "id": 333,
+       "qty": 5
+      },
+      {
+       "id": 113,
+       "qty": 1
+      }
+     ],
+     "reward_members": [
+      {
+       "id": 333,
+       "qty": 10
+      },
+      {
+       "id": 113,
+       "qty": 2
+      }
+     ],
+     "hints": [
+      "Ensure your combat style is set to provide Strength XP. Cows and Farmers around Lumbridge are suitable targets to fight."
+     ]
+    },
+    {
+     "name": "Body builder",
+     "description": "Reach level 20 in the Strength skill.",
+     "skill": "Strength",
+     "level": 20,
+     "varbits": {
+      "completed": 10189,
+      "reward_f2p": 10190,
+      "reward_p2p": 10191
+     },
+     "reward_free": [
+      {
+       "id": 329,
+       "qty": 20
+      },
+      {
+       "id": 113,
+       "qty": 2
+      }
+     ],
+     "reward_members": [
+      {
+       "id": 995,
+       "qty": 500
+      },
+      {
+       "id": 1725,
+       "qty": 1
+      },
+      {
+       "id": 113,
+       "qty": 5
+      }
+     ],
+     "hints": [
+      "Ensure your combat style is set to provide Strength XP. The Al Kharid guards in the Al Kharid palace are suitable targets to fight."
+     ]
+    },
+    {
+     "name": "Getting started with Defence",
+     "description": "Reach level 5 in the Defence skill.",
+     "skill": "Defence",
+     "level": 5,
+     "varbits": {
+      "completed": 10192,
+      "reward_f2p": 10193,
+      "reward_p2p": 10194
+     },
+     "reward_free": [
+      {
+       "id": 1141,
+       "qty": 1
+      }
+     ],
+     "reward_members": [
+      {
+       "id": 1193,
+       "qty": 1
+      }
+     ],
+     "hints": [
+      "Ensure your combat style is set to provide Defence XP. The Men, Chickens and Goblins near Lumbridge are suitable targets to fight."
+     ]
+    },
+    {
+     "name": "Sticks and stones",
+     "description": "Reach level 10 in the Defence skill.",
+     "skill": "Defence",
+     "level": 10,
+     "varbits": {
+      "completed": 10195,
+      "reward_f2p": 10196,
+      "reward_p2p": 10197
+     },
+     "reward_free": [
+      {
+       "id": 1105,
+       "qty": 1
+      }
+     ],
+     "reward_members": [
+      {
+       "id": 1069,
+       "qty": 1
+      }
+     ],
+     "hints": [
+      "Ensure your combat style is set to provide Defence XP. Cows and Farmers around Lumbridge are suitable targets to fight."
+     ]
+    },
+    {
+     "name": "Mithril defence",
+     "description": "Reach level 20 in the Defence skill.",
+     "skill": "Defence",
+     "level": 20,
+     "varbits": {
+      "completed": 10198,
+      "reward_f2p": 10199,
+      "reward_p2p": 10200
+     },
+     "reward_free": [],
+     "reward_members": [],
+     "hints": [],
+     "reward_note": "wiki: free Mithril chainbody; members Mithril full helm, kiteshield, platelegs (page not opened live)"
+    },
+    {
+     "name": "Getting started with Ranged",
+     "description": "Reach level 5 in the Ranged skill.",
+     "skill": "Ranged",
+     "level": 5,
+     "varbits": {
+      "completed": 10201,
+      "reward_f2p": 10202,
+      "reward_p2p": 10203
+     },
+     "reward_free": [
+      {
+       "id": 1167,
+       "qty": 1
+      },
+      {
+       "id": 882,
+       "qty": 75
+      }
+     ],
+     "reward_members": [
+      {
+       "id": 1095,
+       "qty": 1
+      }
+     ],
+     "hints": [
+      "Ensure you have a Ranged weapon for your level with usable ammo. Arrows you fire can be picked up from the ground."
+     ]
+    },
+    {
+     "name": "Honing my aim",
+     "description": "Reach level 10 in the Ranged skill.",
+     "skill": "Ranged",
+     "level": 10,
+     "varbits": {
+      "completed": 10204,
+      "reward_f2p": 10205,
+      "reward_p2p": 10206
+     },
+     "reward_free": [
+      {
+       "id": 843,
+       "qty": 1
+      },
+      {
+       "id": 882,
+       "qty": 275
+      }
+     ],
+     "reward_members": [
+      {
+       "id": 1129,
+       "qty": 1
+      }
+     ],
+     "hints": [
+      "Ensure you have a Ranged weapon for your level with usable ammo. Cows and Farmers around Lumbridge are suitable targets to fight."
+     ]
+    },
+    {
+     "name": "Sharpshooter",
+     "description": "Reach level 20 in the Ranged skill.",
+     "skill": "Ranged",
+     "level": 20,
+     "varbits": {
+      "completed": 10207,
+      "reward_f2p": 10208,
+      "reward_p2p": 10209
+     },
+     "reward_free": [
+      {
+       "id": 849,
+       "qty": 1
+      },
+      {
+       "id": 884,
+       "qty": 75
+      },
+      {
+       "id": 1169,
+       "qty": 1
+      }
+     ],
+     "reward_members": [
+      {
+       "id": 1097,
+       "qty": 1
+      },
+      {
+       "id": 884,
+       "qty": 75
+      }
+     ],
+     "hints": [
+      "Ensure you have a Ranged weapon for your level with usable ammo. The Frogs south of Lumbridge and Wizards west of Lumbridge are suitable targets to fight."
+     ]
+    },
+    {
+     "name": "Getting started with Magic",
+     "description": "Reach level 5 in the Magic skill.",
+     "skill": "Magic",
+     "level": 5,
+     "varbits": {
+      "completed": 10210,
+      "reward_f2p": 10211,
+      "reward_p2p": 10212
+     },
+     "reward_free": [
+      {
+       "id": 558,
+       "qty": 50
+      },
+      {
+       "id": 555,
+       "qty": 75
+      },
+      {
+       "id": 1381,
+       "qty": 1
+      }
+     ],
+     "reward_members": [
+      {
+       "id": 559,
+       "qty": 35
+      }
+     ],
+     "hints": [
+      "Ensure you have runes for a spell you can cast at your Magic level. The Men, Chickens and Goblins near Lumbridge are suitable targets to fight."
+     ]
+    },
+    {
+     "name": "Striking a pose",
+     "description": "Reach level 10 in the Magic skill.",
+     "skill": "Magic",
+     "level": 10,
+     "varbits": {
+      "completed": 10213,
+      "reward_f2p": 10214,
+      "reward_p2p": 10215
+     },
+     "reward_free": [
+      {
+       "id": 558,
+       "qty": 250
+      },
+      {
+       "id": 556,
+       "qty": 250
+      },
+      {
+       "id": 1385,
+       "qty": 1
+      }
+     ],
+     "reward_members": [
+      {
+       "id": 564,
+       "qty": 35
+      }
+     ],
+     "hints": [
+      "Ensure you have runes for a spell you can cast at your Magic level. Cows and Farmers around Lumbridge are suitable targets to fight."
+     ]
+    },
+    {
+     "name": "Bringer of chaos",
+     "description": "Reach level 20 in the Magic skill.",
+     "skill": "Magic",
+     "level": 20,
+     "varbits": {
+      "completed": 10216,
+      "reward_f2p": 10217,
+      "reward_p2p": 10218
+     },
+     "reward_free": [
+      {
+       "id": 558,
+       "qty": 300
+      },
+      {
+       "id": 556,
+       "qty": 300
+      },
+      {
+       "id": 1387,
+       "qty": 1
+      }
+     ],
+     "reward_members": [
+      {
+       "id": 562,
+       "qty": 35
+      },
+      {
+       "id": 1727,
+       "qty": 1
+      }
+     ],
+     "hints": [
+      "Ensure you have runes for a spell you can cast at your Magic level. The Frogs in the swamp south of Lumbridge are suitable targets to fight."
+     ]
+    }
+   ],
+   "complete": {
+    "completed": 10228,
+    "reward_f2p": 10229,
+    "reward_p2p": 10230
+   },
+   "reward": "Combat path voucher"
+  },
+  "gatherer": {
+   "tasks": [
+    {
+     "name": "Getting started with Fishing",
+     "description": "Reach level 5 in the Fishing skill.",
+     "skill": "Fishing",
+     "level": 5,
+     "varbits": {
+      "completed": 10219,
+      "reward_f2p": 10220,
+      "reward_p2p": 10221
+     },
+     "reward_free": [
+      {
+       "id": 307,
+       "qty": 1
+      },
+      {
+       "id": 313,
+       "qty": 100
+      }
+     ],
+     "reward_members": [],
+     "hints": [
+      "You can find fishing spots by looking at the Mini-map and World map for the icon <img=18>. You can get a fishing net from the Fishing Tutor, south of Lumbridge graveyard."
+     ]
+    },
+    {
+     "name": "Getting started with Woodcutting",
+     "description": "Reach level 5 in the Woodcutting skill.",
+     "skill": "Woodcutting",
+     "level": 5,
+     "varbits": {
+      "completed": 10222,
+      "reward_f2p": 10223,
+      "reward_p2p": 10224
+     },
+     "reward_free": [
+      {
+       "id": 1349,
+       "qty": 1
+      },
+      {
+       "id": 1511,
+       "qty": 20
+      }
+     ],
+     "reward_members": [],
+     "hints": [
+      "You can find trees to chop by looking at the Mini-map and World map for tree icons that look similar to this icon <img=16>. You can get an axe from the Woodcutting Tutor."
+     ]
+    },
+    {
+     "name": "Getting started with Mining",
+     "description": "Reach level 5 in the Mining skill.",
+     "skill": "Mining",
+     "level": 5,
+     "varbits": {
+      "completed": 10225,
+      "reward_f2p": 10226,
+      "reward_p2p": 10227
+     },
+     "reward_free": [
+      {
+       "id": 1267,
+       "qty": 1
+      },
+      {
+       "id": 438,
+       "qty": 20
+      },
+      {
+       "id": 436,
+       "qty": 20
+      }
+     ],
+     "reward_members": [],
+     "hints": [
+      "You can find rocks to mine by looking at the Mini-map and World map for the icon <img=17>. You can get a pickaxe from the Mining Tutor, south of Lumbridge graveyard."
+     ]
+    }
+   ],
+   "complete": {
+    "completed": 10231,
+    "reward_f2p": 10232,
+    "reward_p2p": 10233
+   },
+   "reward": "Lamp of the Gatherer (24528): 150 XP in Woodcutting, Fishing or Mining, one use"
+  },
+  "warrior": {
+   "tasks": [
+    "Attack 5 (2634/6253/10475)",
+    "Strength 5 (10476-10478)",
+    "Defence 5 (10479-10481)"
+   ],
+   "complete": [
+    10500,
+    10501,
+    10502
+   ]
+  },
+  "wizard": {
+   "tasks": [
+    "Magic 5 (10482-10484)",
+    "Autocast Water Strike (10485-10487)",
+    "Magic 10 (10488-10490)"
+   ],
+   "complete": [
+    10503,
+    10504,
+    10505
+   ]
+  },
+  "ranger": {
+   "tasks": [
+    "Ranged 5 (10491-10493)",
+    "Equip Iron arrows (10494-10496)",
+    "Ranged 10 (10497-10499)"
+   ],
+   "complete": [
+    10506,
+    10507,
+    10508
+   ]
+  }
+ }
+}
