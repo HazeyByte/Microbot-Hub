@@ -1,0 +1,2872 @@
+package net.runelite.client.plugins.microbot.herbihunter;
+
+import lombok.Getter;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.Client;
+import net.runelite.api.GameState;
+import net.runelite.api.MenuAction;
+import net.runelite.api.widgets.Widget;
+import net.runelite.api.MenuEntry;
+import net.runelite.api.NPC;
+import net.runelite.api.ObjectComposition;
+import net.runelite.api.Perspective;
+import net.runelite.api.Point;
+import net.runelite.api.Skill;
+import net.runelite.api.NPCComposition;
+import net.runelite.api.GameObject;
+import net.runelite.api.Tile;
+import net.runelite.api.TileObject;
+import net.runelite.api.coords.LocalPoint;
+import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.ItemID;
+import net.runelite.api.gameval.VarbitID;
+import net.runelite.client.plugins.microbot.Microbot;
+import net.runelite.client.plugins.microbot.MicrobotConfig;
+import net.runelite.client.plugins.microbot.Script;
+import net.runelite.client.plugins.microbot.breakhandler.BreakHandlerScript;
+import net.runelite.client.plugins.microbot.util.security.LoginManager;
+import net.runelite.client.plugins.microbot.util.antiban.Rs2Antiban;
+import net.runelite.client.plugins.microbot.util.antiban.Rs2AntibanSettings;
+import net.runelite.client.plugins.microbot.util.antiban.enums.Activity;
+import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
+import net.runelite.client.plugins.microbot.util.dialogues.Rs2Dialogue;
+import net.runelite.client.plugins.microbot.util.bank.enums.BankLocation;
+import net.runelite.client.plugins.microbot.util.camera.Rs2Camera;
+import net.runelite.client.plugins.microbot.util.combat.Rs2Combat;
+import net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment;
+import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectModel;
+import net.runelite.client.plugins.microbot.util.grandexchange.Rs2GrandExchange;
+import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
+import net.runelite.client.plugins.microbot.util.inventory.Rs2ItemModel;
+import net.runelite.client.plugins.microbot.util.keyboard.Rs2Keyboard;
+import net.runelite.client.plugins.microbot.util.math.Rs2Random;
+import net.runelite.client.plugins.microbot.util.menu.NewMenuEntry;
+import net.runelite.client.plugins.microbot.util.misc.Rs2UiHelper;
+import net.runelite.client.plugins.microbot.api.npc.models.Rs2NpcModel;
+import net.runelite.client.plugins.microbot.util.player.Rs2Player;
+import net.runelite.client.plugins.microbot.util.walker.Rs2MiniMap;
+import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
+import net.runelite.client.plugins.microbot.util.walker.WalkerState;
+import net.runelite.client.plugins.microbot.util.widget.Rs2Widget;
+import net.runelite.client.plugins.microbot.globval.enums.InterfaceTab;
+import org.slf4j.event.Level;
+
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Objects;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.awt.Rectangle;
+import java.awt.Shape;
+import java.awt.event.KeyEvent;
+import java.util.function.BooleanSupplier;
+import java.util.function.IntPredicate;
+import java.util.function.IntSupplier;
+import java.util.function.Supplier;
+
+@Slf4j
+public class HerbiboarScript extends Script {
+
+    public static int herbiCaught;
+    @Setter
+    @Getter
+    // Volatile: the panel reads it on the client thread every frame.
+    public static volatile HerbiboarState state = HerbiboarState.INITIALIZING;
+    @Getter
+    private static volatile String activity;
+    private boolean attackedTunnel;
+    /** Latched in TUNNEL: finishId drops to 0 the moment the boar comes out. */
+    private WorldPoint huntTunnel;
+    private static final WorldPoint CAMP_BANK = new WorldPoint(3739, 3804, 0);
+    /** Where the pendant's Digsite option lands, about 20 tiles from the barge. */
+    private static final WorldPoint DIGSITE = new WorldPoint(3341, 3445, 0);
+    /** Closer to the barge than this, walking beats spending a charge. */
+    private static final int PENDANT_MIN_TILES = 30;
+    private static final int MAX_TRAVEL_FAILS = 5;
+    private static final String WALKER_CONFIG = "shortestpath", MUSHTREES = "useMagicMushtrees";
+    private static final int[] DIGSITE_PENDANTS = {11190, 11191, 11192, 11193, 11194};
+    private static final WorldPoint RETURN_LOCATION = new WorldPoint(3703, 3878, 0);
+
+    /** The walker abandons the climb, so we click it. */
+    private static final int[] HOLE_SHORTCUT_IDS = {31481, 31482};
+    private static final int HOLE_SHORTCUT_AGILITY = 70;
+    private static final int HOLE_SEARCH_DISTANCE = 40;
+    /** The hole's ends straddle this latitude, separating the southern spots from the northern. */
+    private static final int HOLE_DIVIDE_Y = 3823;
+    /** A herbiboar further than this from our tunnel belongs to someone else. */
+    private static final int HERBIBOAR_TUNNEL_RADIUS = 5;
+    private static final WorldPoint HOLE_MOUTH_SOUTH = new WorldPoint(3716, 3815, 0);
+    private static final WorldPoint HOLE_MOUTH_NORTH = new WorldPoint(3713, 3830, 0);
+    private static final int HOLE_CLIMB_TIMEOUT_MS = 15000;
+    /** Beyond this from the nearest mouth, walking round the cliff beats doubling back to it. */
+    private static final int HOLE_PREFER_DISTANCE = 30;
+    /** The left-click option on every start rock and trail object (not "Search"). */
+    static final String TRAIL_ACTION = "Inspect";
+
+    private static final int STALLS_BEFORE_SHORTCUT = 1;
+    private static final int STALLS_BEFORE_RESET = 5;
+
+    /** Searches take up to ~11s. */
+    private static final int DISPATCH_DEADLINE_TICKS = 20;
+    private static final String HARVEST_ACTION = "Harvest";
+    private static final int[] HERB_SACKS = {ItemID.SLAYER_HERB_SACK, ItemID.SLAYER_HERB_SACK_OPEN,
+            ItemID.SLAYER_HERB_SACK_SILK, ItemID.SLAYER_HERB_SACK_SILK_OPEN};
+    private static final int[] HERB_SACKS_CLOSED = {ItemID.SLAYER_HERB_SACK, ItemID.SLAYER_HERB_SACK_SILK};
+    private static final int HARVEST_READY_TIMEOUT_MS = 2400;
+    private static final int TUNNEL_GIVE_UP_MS = 45000;
+    private static final int CAMERA_STOP_TOLERANCE_MIN = 18;
+    private static final int CAMERA_STOP_TOLERANCE_MAX = 42;
+    private static final int CAMERA_TURN_TIMEOUT_MS = 2500;
+
+    private int stalledWalks;
+    private Instant tunnelSince;
+    private Instant harvestSince;
+    private static final int HARVEST_GIVE_UP_MS = 8000;
+    private static final int MINIMAP_REACH_MIN = 7;
+    private static final double MINIMAP_OUTER_BAND = 0.85;
+    private static final int MINIMAP_SHORT_HOP_PERCENT = 15;
+    private static final int MINIMAP_HOVER_PX = 40;
+    private int confusedTrails;
+    private Instant lastDrinkAt = Instant.EPOCH;
+    private int drinkCooldownMs = nextDrinkCooldownMs();
+    private boolean cameraFramed;
+    private long frameDueAt;
+    private boolean cameUpFromWelcome;
+    private boolean warningToggleTried;
+    private boolean wasLoggedOut;
+    private Boolean savedAutoRun;
+    private boolean savedAutoStamina;
+    private int runBackOnAt = 5;
+    private boolean wasRunOn = true;
+    private static final int LOW_ENERGY_DRINK = 10;
+    private Instant lastMove = Instant.now();
+    private WorldPoint lastLocation;
+
+    public void resetHerbisCaught() {
+        herbiCaught = 0;
+    }
+
+    /** Rs2Camera.getAngleTo is current minus target, so positive needs LEFT. Pure. */
+    static int cameraKeyFor(int signedDeltaDegrees, int toleranceDegrees) {
+        if (Math.abs(signedDeltaDegrees) <= toleranceDegrees) return 0;
+        return signedDeltaDegrees > 0 ? KeyEvent.VK_LEFT : KeyEvent.VK_RIGHT;
+    }
+
+    private int framedZoom;
+
+    /** Higher is closer. A relog, the game or a stray scroll can leave it zoomed in. */
+    private void holdZoom() {
+        if (framedZoom <= 0 || inFlight != null || Rs2Player.isMoving()) return;
+        int now = Rs2Camera.getZoom();
+        if (now <= framedZoom + 10) return;
+        Microbot.log(Level.INFO, "Zoomed in to " + now + " (framed at " + framedZoom + "); zooming back out");
+        Rs2Camera.setZoom(framedZoom);
+        sleep(Rs2Random.betweenInclusive(200, 400));
+    }
+
+    /** Below this the view is too flat: trail spots hide behind fungi and rocks. */
+    static final int MIN_HUNTING_PITCH = 380;
+
+    /** The client walker pitches the camera down on long walks and never restores it. */
+    private void holdPitch() {
+        if (framedZoom <= 0 || inFlight != null || Rs2Player.isMoving()) return;
+        int now = Rs2Camera.getPitch();
+        if (now >= MIN_HUNTING_PITCH) {
+            pitchFixAt = 0;
+            return;
+        }
+        long t = System.currentTimeMillis();
+        if (pitchFixAt == 0) {
+            pitchFixAt = t + habits.pitchFixDelayMs(paceRng);
+            Microbot.log(Level.INFO, "Camera pitched down to " + now + "; raising it in " + (pitchFixAt - t) / 1000 + "s");
+            return;
+        }
+        if (t < pitchFixAt) return;
+        pitchFixAt = 0;
+        Microbot.log(Level.INFO, "Camera pitched down to " + now + "; raising it back");
+        Rs2Camera.setPitch(Rs2Random.betweenInclusive(418, 512));
+        sleep(Rs2Random.betweenInclusive(200, 400));
+    }
+
+    private long pitchFixAt;
+
+    /** Holds an arrow key: setYaw is ten blocking steps and judders, Rs2Camera.turnTo forces 3x speed. */
+    private void turnCameraTo(int targetDegrees, BooleanSupplier doneEarly) {
+        turnCameraTo(targetDegrees, Rs2Random.betweenInclusive(CAMERA_STOP_TOLERANCE_MIN, CAMERA_STOP_TOLERANCE_MAX), doneEarly);
+    }
+
+    private void turnCameraTo(int targetDegrees, int tolerance, BooleanSupplier doneEarly) {
+        int delta = Rs2Camera.getAngleTo(targetDegrees);
+        int key = cameraKeyFor(delta, tolerance);
+        if (key == 0) return;
+        long t0 = System.currentTimeMillis();
+        int from = Rs2Camera.getAngle();
+        Rs2Keyboard.keyHold(key);
+        try {
+            // Also stop once the gap changes sign: a narrow window can be jumped between polls, leaving the key down.
+            sleepUntil(() -> doneEarly.getAsBoolean()
+                    || Math.abs(Rs2Camera.getAngleTo(targetDegrees)) <= tolerance
+                    || Integer.signum(Rs2Camera.getAngleTo(targetDegrees)) != Integer.signum(delta), CAMERA_TURN_TIMEOUT_MS);
+        } finally {
+            Rs2Keyboard.keyRelease(key);
+        }
+        Microbot.log(Level.INFO, "Turned the camera " + from + " -> " + Rs2Camera.getAngle() + " deg (wanted "
+                + targetDegrees + " +-" + tolerance + ", gap was " + delta + ") in " + (System.currentTimeMillis() - t0)
+                + "ms with " + (key == KeyEvent.VK_LEFT ? "LEFT" : "RIGHT") + " for " + state);
+    }
+
+    /** Not in startUp: that is the Swing thread, where camera moves freeze the UI. */
+    private void frameCamera() {
+        List<Runnable> steps = new ArrayList<>();
+        if (Rs2Camera.getZoom() > 140) steps.add(() -> Rs2Camera.setZoom(Rs2Random.betweenInclusive(100, 125)));
+        Integer heading = headingToNearestStart();
+        steps.add(() -> turnCameraTo(heading != null
+                ? Math.floorMod(heading + (int) Rs2Random.randomGaussian(0, 12), 360)
+                : Rs2Random.dicePercentage(50) ? Rs2Random.randomGaussian(132, 9) : Rs2Random.randomGaussian(299, 9),
+                () -> false));
+        int pitch = Rs2Camera.getPitch();
+        if (pitch < 400 || pitch > 512) steps.add(() -> Rs2Camera.setPitch(Rs2Random.betweenInclusive(418, 512)));
+        Collections.shuffle(steps);
+        for (int i = 0; i < steps.size(); i++) {
+            if (i > 0) sleep(Rs2Random.betweenInclusive(180, 560));
+            steps.get(i).run();
+        }
+        // What the client clamped it to: the zoom guard holds us here.
+        framedZoom = Rs2Camera.getZoom();
+    }
+
+    private static Integer headingToNearestStart() {
+        WorldPoint me = Rs2Player.getWorldLocation();
+        if (me == null) return null;
+        WorldPoint rock = HerbiHunterPlugin.START_LOCATIONS.stream()
+                .min(Comparator.comparingInt(me::distanceTo)).orElse(null);
+        if (rock == null || rock.distanceTo(me) < 3) return null;
+        return Math.floorMod(Rs2Camera.angleToTile(rock) - 90, 360);
+    }
+
+    private static boolean canHarvest(Rs2NpcModel npc) {
+        if (npc == null) return false;
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            NPCComposition def = Microbot.getClient().getNpcDefinition(npc.getId());
+            if (def == null || def.getActions() == null) return false;
+            for (String a : def.getActions()) {
+                if (HARVEST_ACTION.equals(a)) return true;
+            }
+            return false;
+        }).orElse(false);
+    }
+
+    /** Never the whole-canvas stand-in clickbox; 60% of the box and 8px each way is enough to click. Pure. */
+    static boolean insideViewport(Rectangle r, int vx, int vy, int vw, int vh) {
+        if (r == null || r.width <= 0 || r.height <= 0 || r.width >= vw || r.height >= vh) return false;
+        Rectangle in = r.intersection(new Rectangle(vx, vy, vw, vh));
+        if (in.isEmpty()) return false;
+        if (in.width == r.width && in.height == r.height) return true;
+        return in.width >= 8 && in.height >= 8 && (double) in.width * in.height >= 0.6 * r.width * r.height;
+    }
+
+    private static boolean insideViewport(Rectangle r) {
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            var c = Microbot.getClient();
+            return insideViewport(r, c.getViewportXOffset(), c.getViewportYOffset(),
+                    c.getViewportWidth(), c.getViewportHeight());
+        }).orElse(false);
+    }
+
+    private static boolean hasAction(Rs2TileObjectModel object, String action) {
+        ObjectComposition comp = object.getObjectComposition();
+        return comp != null && comp.getActions() != null
+                && Arrays.stream(comp.getActions()).anyMatch(action::equalsIgnoreCase);
+    }
+
+    private static boolean partlyInView(Rectangle r) {
+        return !insideViewport(r) && Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            var c = Microbot.getClient();
+            return r.intersects(new Rectangle(c.getViewportXOffset(), c.getViewportYOffset(), c.getViewportWidth(), c.getViewportHeight()));
+        }).orElse(false);
+    }
+
+    private static boolean onScreen(TileObject object) {
+        if (object == null) return false;
+        Shape box = hullOf(object);
+        return box != null && insideViewport(box.getBounds());
+    }
+
+    /** The generic constructor clicks the centre tile, wrong for 2x1 driftwood. */
+    private static Rs2TileObjectModel model(TileObject object) {
+        return object instanceof GameObject ? new Rs2TileObjectModel((GameObject) object) : new Rs2TileObjectModel(object);
+    }
+
+    private boolean moveOnNextHover;
+    private int cursorMisses;
+    /** Tries past something standing in front of the target: 0 re-aim, 1 walk closer, 2-3 camera turns (then 2 again). */
+    private int coverTries;
+    private String cursorMissTarget;
+
+    private boolean hoverOnce(Supplier<? extends Shape> hull, IntSupplier cameraAngle) {
+        return hoverOnce(hull, cameraAngle, Collections.emptyList());
+    }
+
+    private boolean hoverOnce(Supplier<? extends Shape> hull, IntSupplier cameraAngle, List<Shape> neighbours) {
+        Shape s = hull.get();
+        if (s == null) return false;
+        if (!insideViewport(s.getBounds())) return false;
+        List<Rectangle> panels = panels();
+        if (pointInside(s, panels) == null) {
+            if (!nudgeCameraToward(cameraAngle.getAsInt(), () -> {
+                Shape t = hull.get();
+                return t != null && pointInside(t, panels) != null;
+            })) return false;
+            s = hull.get();
+            if (s == null || pointInside(s, panels) == null) return false;
+            moveOnNextHover = true;
+        }
+        List<Shape> avoid = new ArrayList<>(panels);
+        avoid.addAll(neighbours);
+        boolean clearOfNeighbours = pointInside(s, avoid) != null;
+        java.awt.Point mouse = Microbot.getMouse().getMousePosition();
+        if (moveOnNextHover || !s.contains(mouse) || (clearOfNeighbours && covered(mouse.x, mouse.y, neighbours))) {
+            moveOnNextHover = false;
+            return moveLeading(hull, clearOfNeighbours ? avoid : panels);
+        }
+        slideVx = slideVy = 0; // no move this time: an earlier target's slide must not hold the press
+        sampledAt = 0;
+        return true;
+    }
+
+    private boolean moveLeading(Supplier<? extends Shape> hull, List<? extends Shape> panels) {
+        waitForCameraToSettle();
+        Shape s = hull.get();
+        if (s == null || !insideViewport(s.getBounds())) return false;
+        Rectangle before = s.getBounds();
+        long t0 = System.currentTimeMillis();
+        // Over 3-4 frames: two frames quantise to a pixel.
+        if (Rs2Player.isMoving()) sleep(Rs2Random.betweenInclusive(60, 90));
+        Shape now = hull.get();
+        if (now == null || !insideViewport(now.getBounds())) return false;
+        long dt = System.currentTimeMillis() - t0;
+        java.awt.Point in = pointInside(now, panels);
+        if (in == null) return false;
+        // Lead the centre: a growing box's corner moves unlike its middle. No lead standing still: an animating boar reads as a slide.
+        // By the longest recent move (NaturalMouse durations vary), so the cursor lands just ahead and the target slides on.
+        long leadMs = Math.min(leadHorizonMs(recentMoves, recentMoveCount, travelMs) + PRESS_LEAD_MS, msUntilStop());
+        boolean led = Rs2Player.isMoving() && dt >= 40;
+        java.awt.Point aim = led ? lead(in, centre(before), centre(now.getBounds()), dt, leadMs) : in;
+        slideVx = led ? (now.getBounds().getCenterX() - before.getCenterX()) / dt : 0;
+        slideVy = led ? (now.getBounds().getCenterY() - before.getCenterY()) / dt : 0;
+        if (covered(aim.x, aim.y, panels) || !insideViewport(new Rectangle(aim.x, aim.y, 1, 1))) aim = in;
+        long moveStart = System.currentTimeMillis();
+        Microbot.getNaturalMouse().moveTo(aim.x, aim.y);
+        movesThisClick++;
+        lastMoveEnd = System.currentTimeMillis();
+        lastLeadMs = led ? leadMs : 0;
+        lastMoveMs = lastMoveEnd - moveStart;
+        sampledAt = led ? moveStart : 0;
+        sampledCx = now.getBounds().getCenterX();
+        sampledCy = now.getBounds().getCenterY();
+        // A move past this is a stall (scene load, the user's own mouse), not mouse speed; real moves take 150-340ms.
+        if (lastMoveMs <= MOVE_SAMPLE_MAX_MS) {
+            travelMs = (travelMs * 3 + lastMoveMs) / 4;
+            recentMoves[recentMoveCount++ % recentMoves.length] = lastMoveMs;
+        }
+        return true;
+    }
+
+    static final long MOVE_SAMPLE_MAX_MS = 600;
+
+    private int movesThisClick;
+    private long lastLeadMs, lastMoveMs;
+    private final long[] recentMoves = new long[8];
+    private int recentMoveCount;
+    private Boolean savedMoveMouseRandomly;
+    private boolean savedMoveMouseOffScreen, savedSimulateMistakes;
+    private double slideVx, slideVy;
+    private long sampledAt;
+    private double sampledCx, sampledCy;
+
+    private double[] seenSlide(Rectangle nowBox) {
+        long dt = System.currentTimeMillis() - sampledAt;
+        if (sampledAt == 0 || nowBox == null || dt <= 0) return new double[]{0, 0};
+        return new double[]{(nowBox.getCenterX() - sampledCx) / dt, (nowBox.getCenterY() - sampledCy) / dt};
+    }
+
+    static long leadHorizonMs(long[] recent, int count, long fallback) {
+        int n = Math.min(count, recent.length);
+        long max = 0;
+        for (int i = 0; i < n; i++) max = Math.max(max, recent[i]);
+        return n == 0 ? fallback : Math.min(max, 2 * fallback); // one outlier must not over-lead the next 8 moves
+    }
+
+    static long followWaitMs(long leadMs, long moveMs) {
+        return Math.max(0, leadMs - moveMs) + 120;
+    }
+
+    static boolean slidPast(Rectangle target, java.awt.Point cursor, double vx, double vy) {
+        if (target == null || cursor == null || vx * vx + vy * vy < 1e-4) return false;
+        return (cursor.x - target.getCenterX()) * vx + (cursor.y - target.getCenterY()) * vy < 0;
+    }
+
+    static long msUntilUnderCursor(Rectangle target, java.awt.Point cursor, double vx, double vy, long maxWaitMs) {
+        double v2 = vx * vx + vy * vy;
+        if (target == null || cursor == null || v2 < 1e-4) return -1;
+        double rx = cursor.x - target.getCenterX(), ry = cursor.y - target.getCenterY();
+        double t = (rx * vx + ry * vy) / v2;
+        if (t <= 0 || t > maxWaitMs) return -1;
+        double off = Math.hypot(rx - vx * t, ry - vy * t);
+        return off <= halfWidthAcross(target, vx, vy) ? Math.round(t) : -1;
+    }
+
+    /** Half the width across the slide, not half the shorter side, which refuses a diagonal slide too early. Pure. */
+    static double halfWidthAcross(Rectangle target, double vx, double vy) {
+        double v = Math.hypot(vx, vy);
+        return (target.width * Math.abs(vy) + target.height * Math.abs(vx)) / v / 2.0;
+    }
+
+    /** Running covers 2 tiles a tick (256 local units / 600ms), walking 1. */
+    private static final double RUN_UNITS_PER_MS = 256 / 600.0;
+
+    private static long msUntilStop() {
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            var c = Microbot.getClient();
+            LocalPoint me = c.getLocalPlayer() == null ? null : c.getLocalPlayer().getLocalLocation();
+            LocalPoint dest = c.getLocalDestinationLocation();
+            // The flag clears before the glide onto the last tile ends: the scene still slides, so end on the server tile.
+            if (dest == null && me != null) {
+                dest = LocalPoint.fromWorld(c.getTopLevelWorldView(), c.getLocalPlayer().getWorldLocation());
+            }
+            return dest == null || me == null ? 0L : msToCover(me.distanceTo(dest), Rs2Player.isRunEnabled());
+        }).orElse(0L);
+    }
+
+    static long msToCover(int localUnits, boolean running) {
+        return Math.round(localUnits / (running ? RUN_UNITS_PER_MS : RUN_UNITS_PER_MS / 2));
+    }
+
+    private long lastMoveEnd;
+    private long nextLoginAt;
+
+    private void waitForCameraToSettle() {
+        sleepUntil(() -> !cameraEasing(), 600);
+    }
+
+    /** Whole-degree yaw reads equal mid-glide, so presses hit Walk here. */
+    private boolean cameraEasing() {
+        // Raw yaw (16384 a turn) moves every frame of a glide; getCameraYawTarget equals getCameraYaw, so it never shows a turn.
+        // Yaw only: a slow pitch drift blocks presses with the target still on screen.
+        long now = System.currentTimeMillis();
+        int before;
+        if (lastYawRaw != Integer.MIN_VALUE && now - lastYawAt >= 15 && now - lastYawAt <= 80) {
+            before = lastYawRaw;
+        } else {
+            before = rawYaw();
+            sleep(20);
+        }
+        int y = rawYaw();
+        lastYawRaw = y;
+        lastYawAt = System.currentTimeMillis();
+        return angleUnitsApart(y, before) > CAMERA_STILL_UNITS;
+    }
+
+    private int lastYawRaw = Integer.MIN_VALUE;
+    private long lastYawAt;
+
+    private static int rawYaw() {
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> Microbot.getClient().getCameraYaw()).orElse(0);
+    }
+
+    static int angleUnitsApart(int a, int b) {
+        int d = Math.floorMod(a - b, 16384);
+        return Math.min(d, 16384 - d);
+    }
+
+    /** Raw yaw change per frame below which the camera is still (~0.2 deg). */
+    private static final int CAMERA_STILL_UNITS = 8;
+
+    private long travelMs = 250;
+
+    /** A jump faster than any scroll (camera snap, re-render) is not led. Pure. */
+    static java.awt.Point lead(java.awt.Point aim, java.awt.Point before, java.awt.Point after, long dtMs, long travelMs) {
+        if (dtMs <= 0) return aim;
+        double vx = (after.x - before.x) / (double) dtMs, vy = (after.y - before.y) / (double) dtMs;
+        if (Math.hypot(vx, vy) > MAX_SCROLL_PX_PER_MS) return aim;
+        return new java.awt.Point(aim.x + (int) Math.round(vx * travelMs), aim.y + (int) Math.round(vy * travelMs));
+    }
+
+    /** Running scrolls the scene at roughly 0.1-0.2 px/ms; above this it is not a scroll. */
+    private static final double MAX_SCROLL_PX_PER_MS = 1.0;
+    private static final int PRESS_LEAD_MS = 60;
+
+    private static java.awt.Point centre(Rectangle r) {
+        return new java.awt.Point((int) Math.round(r.getCenterX()), (int) Math.round(r.getCenterY()));
+    }
+
+
+    /** The box's empty corners are "Walk here". */
+    static java.awt.Point pointInside(Shape s, List<? extends Shape> panels) {
+        Rectangle r = s.getBounds();
+        // The middle half first: a margin for the slide, and the outline's thin edges pick Walk here.
+        {
+            Rectangle mid = new Rectangle(r.x + r.width / 4, r.y + r.height / 4, Math.max(1, r.width / 2), Math.max(1, r.height / 2));
+            for (int i = 0; i < 16; i++) {
+                Point p = Rs2UiHelper.getClickingPoint(mid, true);
+                if (s.contains(p.getX(), p.getY()) && !covered(p.getX(), p.getY(), panels)) {
+                    return new java.awt.Point(p.getX(), p.getY());
+                }
+            }
+        }
+        for (int i = 0; i < 24; i++) {
+            Point p = Rs2UiHelper.getClickingPoint(r, true);
+            if (s.contains(p.getX(), p.getY()) && !covered(p.getX(), p.getY(), panels)) {
+                return new java.awt.Point(p.getX(), p.getY());
+            }
+        }
+        List<java.awt.Point> clear = new ArrayList<>();
+        for (int y = r.y; y < r.y + r.height; y++) {
+            for (int x = r.x; x < r.x + r.width; x++) {
+                if (s.contains(x, y) && !covered(x, y, panels)) clear.add(new java.awt.Point(x, y));
+            }
+        }
+        return clear.isEmpty() ? null : clear.get(Rs2Random.betweenInclusive(0, clear.size() - 1));
+    }
+
+    /** The game picks its model right up to the outline. */
+    static final int BLOCKER_MARGIN_PX = 3;
+
+    static Shape blockerZone(Shape blocker) {
+        java.awt.geom.Area zone = new java.awt.geom.Area(blocker);
+        zone.add(new java.awt.geom.Area(new java.awt.BasicStroke(2f * BLOCKER_MARGIN_PX).createStrokedShape(blocker)));
+        return zone;
+    }
+
+    private boolean clickable(Shape s) {
+        return s != null && insideViewport(s.getBounds()) && pointInside(s, panels()) != null;
+    }
+
+    static boolean covered(int x, int y, List<? extends Shape> panels) {
+        return panels.stream().anyMatch(p -> p.contains(x, y));
+    }
+
+    private List<Rectangle> panels() {
+        List<Rectangle> found = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            var c = Microbot.getClient();
+            List<Rectangle> out = new ArrayList<>();
+            Widget[] roots = c.getWidgetRoots();
+            if (roots != null) {
+                for (Widget w : roots) collectPanels(w, c.getViewportWidth(), c.getViewportHeight(), out);
+            }
+            out.addAll(outsideView(c.getViewportXOffset(), c.getViewportYOffset(), c.getViewportWidth(), c.getViewportHeight()));
+            return out;
+        }).orElse(Collections.<Rectangle>emptyList());
+        return found;
+    }
+
+    static List<Rectangle> outsideView(int vx, int vy, int vw, int vh) {
+        int far = 10_000;
+        return List.of(new Rectangle(vx - far, vy - far, vw + 2 * far, far), new Rectangle(vx - far, vy + vh, vw + 2 * far, far),
+                new Rectangle(vx - far, vy, far, vh), new Rectangle(vx + vw, vy, far, vh));
+    }
+
+    private static void collectPanels(Widget w, int vw, int vh, List<Rectangle> out) {
+        if (w == null || w.isHidden()) return;
+        Rectangle b = w.getBounds();
+        // Anything about the size of the game view is a container: look inside it.
+        boolean container = b == null || (b.width >= vw * 0.9 && b.height >= vh * 0.9);
+        boolean takesClick = w.getNoClickThrough()
+                || (w.getActions() != null && Arrays.stream(w.getActions()).anyMatch(a -> a != null && !a.isEmpty()));
+        if (!container && takesClick && b.width > 0 && b.height > 0) {
+            // An outline's last 1-2px beside a panel reads Walk here.
+            Rectangle grown = new Rectangle(b);
+            grown.grow(BLOCKER_MARGIN_PX, BLOCKER_MARGIN_PX);
+            out.add(grown);
+            return;
+        }
+        for (Widget[] kids : new Widget[][]{w.getStaticChildren(), w.getDynamicChildren(), w.getNestedChildren()}) {
+            if (kids != null) for (Widget k : kids) collectPanels(k, vw, vh, out);
+        }
+    }
+
+    private List<Shape> overlappingTrailHulls(TileObject target) {
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            Shape t = target.getClickbox();
+            List<Shape> out = new ArrayList<>();
+            if (t == null) return out;
+            for (TileObject o : plugin.getTrailObjects().values()) {
+                if (o == null || o == target) continue;
+                Shape h = o.getClickbox();
+                if (h != null && h.getBounds().intersects(t.getBounds())) out.add(h);
+            }
+            return out;
+        }).orElse(Collections.emptyList());
+    }
+
+    private static Shape hullOf(TileObject object) {
+        return Microbot.getClientThread().runOnClientThreadOptional(object::getClickbox).orElse(null);
+    }
+
+    /** Rs2UiHelper.getActorClickbox only gives its bounding box. */
+    private static Shape hullOf(Rs2NpcModel npc) {
+        return npc == null ? null : Microbot.getClientThread().runOnClientThreadOptional(npc::getConvexHull).orElse(null);
+    }
+
+    /** Held dead still, the press lands on the edge of a sliding target, where the game reads Walk here. */
+    private void driftToward(Rectangle box, java.awt.Point cursor) {
+        double dx = box.getCenterX() - cursor.x, dy = box.getCenterY() - cursor.y;
+        double len = Math.hypot(dx, dy);
+        if (len < 1) return;
+        double step = Math.min(len, Rs2Random.betweenInclusive(2, 3));
+        int x = (int) Math.round(cursor.x + dx / len * step), y = (int) Math.round(cursor.y + dy / len * step);
+        if (covered(x, y, panels())) return;
+        Microbot.getMouse().move(new Point(x, y));
+    }
+
+    /** Under a panel: turn the camera. Under something in the world: re-aim, turn, walk closer, never a right-click. */
+    private boolean clickUnderCursor(String action, int id, Supplier<? extends Shape> hull, Runnable forcedClick,
+                                     Object what, IntSupplier cameraAngle) {
+        String target = String.valueOf(what);
+        if (!target.equals(cursorMissTarget)) {
+            // Per target, not per object id: two spots of the same kind share an id.
+            cursorMissTarget = target;
+            cursorMisses = 0;
+            coverTries = 0;
+            movesThisClick = Math.min(movesThisClick, 1);
+        }
+        // Running: no settle. The move aimed at where the target will be, so any wait lets it slide off.
+        if (!Rs2Player.isMoving()) {
+            long settleLeft = Rs2Random.betweenInclusive(70, 110) - (System.currentTimeMillis() - lastMoveEnd);
+            if (settleLeft > 0) sleep((int) settleLeft);
+        }
+        // The game's top entry is built from what is under the cursor that frame.
+        // Pinned (Microbot.targetMenu) so a slide cannot turn it into Walk here.
+        int[] tile = what instanceof WorldPoint ? Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            var c = Microbot.getClient();
+            LocalPoint lp = LocalPoint.fromWorld(c.getTopLevelWorldView(), (WorldPoint) what);
+            return lp == null ? new int[0] : new int[]{lp.getSceneX(), lp.getSceneY()};
+        }).orElse(new int[0]) : new int[0];
+        java.util.function.Predicate<MenuEntry> ours = e -> e != null
+                && leftClickDoes(e.getOption(), e.getIdentifier(), action, id)
+                && onOurTile(e.getType(), e.getParam0(), e.getParam1(), tile);
+        MenuEntry top = topMenuEntry();
+        boolean followed = false;
+        long watchStart = System.currentTimeMillis();
+        long slideCap = watchStart + 1200;
+        long watchUntil = watchStart + Rs2Random.betweenInclusive(380, 520);
+        while (!ours.test(top) && System.currentTimeMillis() < watchUntil) {
+            sleep(Rs2Random.betweenInclusive(10, 16)); // under a client frame: catch the first frame it is ours
+            Shape s = hull.get();
+            java.awt.Point cursorAt = Microbot.getMouse().getMousePosition();
+            if (!followed && s != null && !s.contains(cursorAt) && insideViewport(s.getBounds())) {
+                long eta = Rs2Player.isMoving() ? msUntilUnderCursor(s.getBounds(), cursorAt, slideVx, slideVy, 600) : -1;
+                if (eta >= 0) {
+                    driftToward(s.getBounds(), cursorAt);
+                    watchUntil = Math.max(watchUntil, Math.min(System.currentTimeMillis() + eta + 120, slideCap));
+                    top = topMenuEntry();
+                    continue;
+                }
+                followed = true;
+                Rectangle fb = s.getBounds();
+                double fdx = cursorAt.x - fb.getCenterX(), fdy = cursorAt.y - fb.getCenterY();
+                double fv = Math.hypot(slideVx, slideVy);
+                double[] seen = seenSlide(fb);
+                double seenVx = seen[0], seenVy = seen[1];
+                Microbot.log(Level.INFO, String.format(java.util.Locale.ENGLISH,
+                        "[HB-FOLLOW] %s: cursor %+.0f,%+.0f from its centre, box %dx%d, slide %.2f,%.2f (seen over the move %.2f,%.2f), %s",
+                        action, fdx, fdy, fb.width, fb.height, slideVx, slideVy, seenVx, seenVy,
+                        !Rs2Player.isMoving() || fv < 1e-2 ? "not sliding"
+                                : (fdx * slideVx + fdy * slideVy) <= 0 ? "behind it"
+                                : String.format(java.util.Locale.ENGLISH, "ahead, %.0fpx off its line (tolerance %.0f)",
+                                        Math.abs(fdx * slideVy - fdy * slideVx) / fv, Math.min(fb.width, fb.height) / 2.0)));
+                moveLeading(hull, panels());
+                long followWait = habits.impatientPress(paceRng) ? 120 : followWaitMs(lastLeadMs, lastMoveMs);
+                watchUntil = Math.max(watchUntil, Math.min(System.currentTimeMillis() + followWait, slideCap));
+            } else if (followed && s != null && !s.contains(cursorAt) && Rs2Player.isMoving()
+                    && slidPast(s.getBounds(), cursorAt, slideVx, slideVy)) {
+                break;
+            }
+            top = topMenuEntry();
+        }
+        String miss;
+        boolean clicked = false;
+        if (top instanceof NewMenuEntry && ours.test(top)) {
+            clicked = true;
+            int clicks = plugin.getClickCount();
+            // The canvas position is (-1,-1) once the cursor leaves the window.
+            java.awt.Point at = Microbot.getMouse().getMousePosition();
+            Microbot.getMouse().click(new Point(at.x, at.y), (NewMenuEntry) top);
+            // Running, the target can slide off between the read and the press.
+            if (sleepUntil(() -> plugin.getClickCount() != clicks, 600)
+                    && leftClickDoes(plugin.getLastClickedOption(), plugin.getLastClickedId(), action, id)) {
+                if (movesThisClick >= 2) {
+                    Microbot.log(Level.INFO, "[HB-AIM] %s on %s took %d moves (cursor %d,%d, last lead %dms, move took %dms)%s",
+                            action, what, movesThisClick, at.x, at.y, lastLeadMs, lastMoveMs,
+                            Rs2Player.isMoving() ? ", running" : "");
+                }
+                movesThisClick = 0;
+                cursorMisses = 0;
+                coverTries = 0;
+                return true;
+            }
+            miss = "the click did " + plugin.getLastClickedOption();
+        } else {
+            miss = "under the cursor is " + (top == null ? "nothing" : Rs2UiHelper.stripTags(top.getOption() + " " + top.getTarget()));
+        }
+        Shape s = hull.get();
+        miss += s == null ? " (target has no outline)"
+                : s.contains(Microbot.getMouse().getMousePosition()) ? " (cursor inside its outline)" : " (cursor off its outline)";
+        miss += Rs2Player.isMoving() ? ", running" : "";
+        java.awt.Point cur = Microbot.getMouse().getMousePosition();
+        Rectangle b = s == null ? null : s.getBounds();
+        double[] seen = seenSlide(b);
+        double seenVx = seen[0], seenVy = seen[1];
+        miss += String.format(java.util.Locale.ENGLISH,
+                " [zoom %d, box %s, cursor %d,%d, slide %.2f,%.2f px/ms (seen %.2f,%.2f), moves %d, lead %dms, move took %dms]",
+                Rs2Camera.getZoom(), b == null ? "-" : b.width + "x" + b.height + "@" + b.x + "," + b.y,
+                cur.x, cur.y, slideVx, slideVy, seenVx, seenVy, movesThisClick, lastLeadMs, lastMoveMs);
+        if (!clicked && ours.test(top)) {
+            Microbot.log(Level.INFO, miss + ": " + action + " is under the cursor; clicking once it settles");
+            return false;
+        }
+        if (top != null && uiCovers(top.getType()) && s != null && s.contains(Microbot.getMouse().getMousePosition())
+                && nudgeCameraToward(cameraAngle.getAsInt())) {
+            Microbot.log(Level.INFO, miss + ": " + what + " is behind a panel; turning the camera slightly");
+            moveOnNextHover = true;
+            return false;
+        }
+        // Only another object/NPC on top is "in front"; Walk here means the cursor simply missed.
+        // NPC indexes are unique; object ids are not.
+        if (top != null && top.getType() == MenuAction.EXAMINE_NPC && top.getIdentifier() == id) {
+            Microbot.log(Level.INFO, miss + ": " + what + " is not offering " + action + " yet");
+            return false;
+        }
+        if (top != null && !uiCovers(top.getType()) && top.getType() != MenuAction.WALK
+                && !"Walk here".equalsIgnoreCase(top.getOption()) && s != null && s.contains(Microbot.getMouse().getMousePosition())) {
+            String blocked = miss + ": " + Rs2UiHelper.stripTags(top.getTarget()) + " is in front of " + what;
+            knownBlockers.put(target, top);
+            Shape blocker = blockerShape(top);
+            if (coverTries == 0) {
+                coverTries++;
+                List<Shape> avoid = new ArrayList<>(panels());
+                if (blocker != null) avoid.add(blockerZone(blocker));
+                if (s != null && pointInside(s, avoid) != null) {
+                    Microbot.log(Level.INFO, blocked + "; aiming at the part it leaves showing");
+                    moveLeading(hull, avoid);
+                    return false;
+                }
+            }
+            WorldPoint spot = what instanceof WorldPoint ? (WorldPoint) what : null;
+            WorldPoint me = Rs2Player.getWorldLocation();
+            if (coverTries == 1) {
+                coverTries++;
+                if (!target.equals(walkedCloserFor) && spot != null && me != null && me.distanceTo(spot) > 2) {
+                    walkedCloserFor = target;
+                    Microbot.log(Level.INFO, blocked + "; walking closer for another angle");
+                    dropWalkerRoute();
+                    if (Rs2Walker.walkMiniMap(spot)) sleepUntil(() -> spot.distanceTo(Rs2Player.getWorldLocation()) <= 2, 4000);
+                    moveOnNextHover = true;
+                    return false;
+                }
+            }
+            Microbot.log(Level.INFO, blocked + (coverTries == 2 ? "; turning the camera so it stands clear" : "; turning the camera the other way"));
+            peekAround(coverTries == 2 ? 1 : -2);
+            coverTries = coverTries == 2 ? 3 : 2;
+            // Falls through: counted as a miss, so a blocker that never clears ends in the forced click, not endless turns.
+        }
+        // Never stop to wait for the character: a stop-and-retry is a visible jerk.
+        ++cursorMisses;
+        WorldPoint missSpot = what instanceof WorldPoint ? (WorldPoint) what : null;
+        WorldPoint meNow = Rs2Player.getWorldLocation();
+        if (cursorMisses >= 4 && top != null && "Walk here".equalsIgnoreCase(top.getOption()) && s != null
+                && s.contains(Microbot.getMouse().getMousePosition()) && missSpot != null && meNow != null
+                && meNow.distanceTo(missSpot) > 3) {
+            // On its outline yet the game offers Walk here: not clickable from here (not drawn, too far).
+            Microbot.log(Level.INFO, miss + ", not " + action + " on " + what + ", 4 times; walking closer instead");
+            cursorMisses = 0;
+            dropWalkerRoute();
+            if (Rs2Walker.walkMiniMap(missSpot)) sleepUntil(() -> missSpot.distanceTo(Rs2Player.getWorldLocation()) <= 3, 6000);
+            moveOnNextHover = true;
+            return false;
+        }
+        if (cursorMisses >= 4) {
+            Microbot.log(Level.WARN, miss + ", not " + action + " on " + what + ", 4 times; sending " + action + " anyway");
+            cursorMisses = 0;
+            coverTries = 0;
+            forcedClick.run();
+            return true;
+        }
+        Microbot.log(Level.INFO, miss + ", not " + action + " on " + what + " (miss " + cursorMisses + ")");
+        moveOnNextHover = s != null && s.contains(Microbot.getMouse().getMousePosition());
+        return false;
+    }
+
+    private MenuEntry topMenuEntry() {
+        return plugin.getTopEntry();
+    }
+
+    private boolean nudgeCameraToward(int targetDegrees) {
+        return nudgeCameraToward(targetDegrees, () -> false);
+    }
+
+    private void peekAround(int steps) {
+        if (peekSide == 0 || steps > 0) peekSide = Rs2Random.dicePercentage(50) ? 1 : -1;
+        int by = Rs2Random.betweenInclusive(35, 60) * steps * peekSide;
+        turnCameraTo(Math.floorMod(Rs2Camera.getAngle() + by, 360), 6, () -> false);
+    }
+
+    private int peekSide;
+    private String walkedCloserFor;
+    private final Map<String, MenuEntry> knownBlockers = new ConcurrentHashMap<>();
+
+    private List<Shape> withKnownBlocker(Object what, List<Shape> neighbours) {
+        // Remembered most visits, not every one: perfect memory is its own pattern.
+        if (!habits.recallsBlocker(paceRng)) return neighbours;
+        Shape b = blockerShape(knownBlockers.get(String.valueOf(what)));
+        if (b == null) return neighbours;
+        List<Shape> out = new ArrayList<>(neighbours);
+        out.add(blockerZone(b));
+        return out;
+    }
+
+    /** Objects count too: a Smelly mushroom stands in front of a tunnel. */
+    private static Shape blockerShape(MenuEntry top) {
+        if (top == null || top.getType() == null) return null;
+        MenuAction t = top.getType();
+        boolean npc = t == MenuAction.NPC_FIRST_OPTION || t == MenuAction.NPC_SECOND_OPTION || t == MenuAction.NPC_THIRD_OPTION
+                || t == MenuAction.NPC_FOURTH_OPTION || t == MenuAction.NPC_FIFTH_OPTION || t == MenuAction.EXAMINE_NPC;
+        boolean object = t == MenuAction.GAME_OBJECT_FIRST_OPTION || t == MenuAction.GAME_OBJECT_SECOND_OPTION
+                || t == MenuAction.GAME_OBJECT_THIRD_OPTION || t == MenuAction.GAME_OBJECT_FOURTH_OPTION
+                || t == MenuAction.GAME_OBJECT_FIFTH_OPTION || t == MenuAction.EXAMINE_OBJECT;
+        if (!npc && !object) return null;
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            var wv = Microbot.getClient().getTopLevelWorldView();
+            if (npc) {
+                NPC n = wv.npcs().byIndex(top.getIdentifier());
+                return n == null ? null : n.getConvexHull();
+            }
+            int x = top.getParam0(), y = top.getParam1();
+            Tile[][][] tiles = wv.getScene().getTiles();
+            if (x < 0 || y < 0 || x >= tiles[wv.getPlane()].length || y >= tiles[wv.getPlane()][x].length) return null;
+            Tile tile = tiles[wv.getPlane()][x][y];
+            if (tile == null) return null;
+            List<TileObject> on = new ArrayList<>();
+            for (GameObject g : tile.getGameObjects()) if (g != null) on.add(g);
+            on.add(tile.getGroundObject());
+            on.add(tile.getDecorativeObject());
+            on.add(tile.getWallObject());
+            for (TileObject o : on) {
+                if (o != null && o.getId() == top.getIdentifier() && o.getClickbox() != null) return o.getClickbox();
+            }
+            return null;
+        }).orElse(null);
+    }
+
+    private boolean nudgeCameraToward(int targetDegrees, BooleanSupplier clear) {
+        int delta = Math.abs(Rs2Camera.getAngleTo(targetDegrees));
+        if (delta < 8) return false;
+        turnCameraTo(targetDegrees, delta * Rs2Random.betweenInclusive(15, 35) / 100, clear);
+        return true;
+    }
+
+    static boolean uiCovers(MenuAction type) {
+        return type == MenuAction.CANCEL || type == MenuAction.CC_OP || type == MenuAction.CC_OP_LOW_PRIORITY
+                || type.name().startsWith("WIDGET_");
+    }
+
+    static boolean leftClickDoes(String topOption, int topId, String action, int id) {
+        return topOption != null && topOption.equalsIgnoreCase(action) && topId == id;
+    }
+
+    /** Give or take 2 for wide objects; every tunnel shares one id. Pure. */
+    static boolean onOurTile(MenuAction type, int sceneX, int sceneY, int[] tile) {
+        if (tile.length < 2 || type == null || !type.name().startsWith("GAME_OBJECT_")) return true;
+        return Math.abs(sceneX - tile[0]) <= 2 && Math.abs(sceneY - tile[1]) <= 2;
+    }
+
+    /** Time, not passes: the poll is fast. */
+    private long hiddenSince;
+    private boolean pitchedForHidden;
+
+    private boolean clickWhenVisible(int cameraAngle, Supplier<? extends Shape> hull, WorldPoint what) {
+        if (clickable(hull.get())) {
+            hiddenSince = 0;
+            return true;
+        }
+        WorldPoint me = Rs2Player.getWorldLocation();
+        if (what != null && me != null && me.distanceTo(what) > CAMERA_TURN_MAX_TILES
+                && minimapStepToward(what, () -> clickable(hull.get()))) {
+            hiddenSince = 0;
+            idle("walking toward " + what + " until it is on screen");
+            return clickable(hull.get());
+        }
+        if (bringIntoView(cameraAngle, hull)) {
+            hiddenSince = 0;
+            return true;
+        }
+        long now = System.currentTimeMillis();
+        if (hiddenSince == 0) {
+            hiddenSince = now;
+            pitchedForHidden = false;
+        }
+        if (!pitchedForHidden && now - hiddenSince > 1000) {
+            pitchedForHidden = true;
+            Rs2Camera.setPitch(Rs2Random.betweenInclusive(430, 512));
+        }
+        if (now - hiddenSince > 2000) {
+            Microbot.log(Level.INFO, what + " never came into view; clicking it anyway");
+            hiddenSince = 0;
+            return true;
+        }
+        idle("bringing " + what + " into view");
+        return false;
+    }
+
+    private boolean bringIntoView(int cameraAngle, Supplier<? extends Shape> hull) {
+        if (clickable(hull.get())) return true;
+        // At the edge of the view it slides fastest.
+        turnCameraTo(cameraAngle, () -> comfortablyInView(hull.get()));
+        return clickable(hull.get());
+    }
+
+    private static final int CAMERA_TURN_MAX_TILES = 2;
+
+    /** Further out an object projects an outline but is not drawn, so clicks read "Walk here". */
+    private static final int CLICK_MAX_TILES = 28;
+    /** Beyond this a faced spot is not reliably drawn: a game limit, not a habit. */
+    static final int TURN_SHOWS_MAX_TILES = 24;
+
+    static boolean smallTurnShows(int distance, boolean drawn, int degreesOff, int maxDeg, int clickRange) {
+        // Already faced (under 5 deg), a turn shows nothing more: it is off the top or bottom.
+        return drawn && distance > CAMERA_TURN_MAX_TILES && distance <= clickRange
+                && Math.abs(degreesOff) >= 5 && Math.abs(degreesOff) < maxDeg;
+    }
+
+    static boolean walkFirst(boolean onScreen, int distance) {
+        return walkFirst(onScreen, distance, CLICK_MAX_TILES);
+    }
+
+    static boolean walkFirst(boolean onScreen, int distance, int clickRange) {
+        return (!onScreen || distance > clickRange) && distance > CAMERA_TURN_MAX_TILES;
+    }
+
+    private boolean comfortablyInView(Shape s) {
+        if (!clickable(s)) return false;
+        Rectangle b = s.getBounds();
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            var c = Microbot.getClient();
+            int mx = c.getViewportWidth() * 15 / 100, my = c.getViewportHeight() * 15 / 100;
+            return new Rectangle(c.getViewportXOffset() + mx, c.getViewportYOffset() + my,
+                    c.getViewportWidth() - 2 * mx, c.getViewportHeight() - 2 * my).contains(b.getCenterX(), b.getCenterY());
+        }).orElse(false);
+    }
+
+    static boolean shouldUseHole(WorldPoint from, WorldPoint to) {
+        return crossesHole(from, to)
+                && from.distanceTo(holeMouthNearest(from)) <= HOLE_PREFER_DISTANCE;
+    }
+
+    /** The hole is the only multi-tile hop across the divide. Pure. */
+    static boolean pathJumpsHole(List<WorldPoint> path) {
+        if (path == null) return false;
+        for (int i = 0; i + 1 < path.size(); i++) {
+            WorldPoint a = path.get(i), b = path.get(i + 1);
+            if (crossesHole(a, b) && a.distanceTo(b) > 2) return true;
+        }
+        return false;
+    }
+
+    private WorldPoint holeDecisionTarget;
+    private boolean holeDecision;
+
+    private boolean useHole(WorldPoint from, WorldPoint to) {
+        if (from == null || to == null || !crossesHole(from, to)) return false;
+        if (Rs2Player.getRealSkillLevel(Skill.AGILITY) < HOLE_SHORTCUT_AGILITY) return false;
+        if (!to.equals(holeDecisionTarget)) {
+            List<WorldPoint> path = Rs2Walker.getWalkPath(from, to);
+            holeDecision = path.isEmpty() ? shouldUseHole(from, to) : pathJumpsHole(path);
+            holeDecisionTarget = to;
+            Microbot.log(Level.INFO, (holeDecision ? "Using the hole" : "Walking round, not the hole")
+                    + " to " + to + " (route " + path.size() + " tiles)");
+        }
+        return holeDecision;
+    }
+
+    static WorldPoint holeMouthNearest(WorldPoint from) {
+        return from != null && from.getY() < HOLE_DIVIDE_Y ? HOLE_MOUTH_SOUTH : HOLE_MOUTH_NORTH;
+    }
+
+    private static String trailProgress(HerbiHunterPlugin plugin) {
+        return plugin.getCurrentPath().size() + ":" + plugin.getFinishId();
+    }
+
+    /** The boar always comes out on the same tile per tunnel; unlisted tunnels are learned at the first harvest. */
+    static final Map<WorldPoint, WorldPoint> SEEDED_BOAR_TILES = Map.of(
+            new WorldPoint(3693, 3798, 0), new WorldPoint(3696, 3796, 0),
+            new WorldPoint(3751, 3849, 0), new WorldPoint(3753, 3851, 0),
+            new WorldPoint(3710, 3881, 0), new WorldPoint(3710, 3883, 0),
+            new WorldPoint(3705, 3814, 0), new WorldPoint(3707, 3801, 0),
+            new WorldPoint(3681, 3863, 0), new WorldPoint(3681, 3865, 0),
+            new WorldPoint(3685, 3869, 0), new WorldPoint(3683, 3870, 0),
+            new WorldPoint(3700, 3777, 0), new WorldPoint(3665, 3784, 0),
+            new WorldPoint(3702, 3808, 0), new WorldPoint(3704, 3808, 0),
+            new WorldPoint(3703, 3826, 0), new WorldPoint(3705, 3827, 0));
+    private final Map<WorldPoint, WorldPoint> boarTiles = new ConcurrentHashMap<>(SEEDED_BOAR_TILES);
+
+    /** Height above its tile to aim at the boar's body, in local units. */
+    private static final int BOAR_BODY_HEIGHT = 50;
+    private static final int PRE_HOVER_NEAR_PX = 8;
+    private java.awt.Point preHoverAim;
+
+    private boolean preHoverBoarSpot(WorldPoint tunnel) {
+        WorldPoint tile = tunnel == null ? null : boarTiles.get(tunnel);
+        WorldPoint me = Rs2Player.getWorldLocation();
+        // Aimed earlier, the camera follows the player and the spot is far off.
+        String why = tile == null ? "tile unknown" : me == null ? "no player" : me.distanceTo(tunnel) > 2 ? "not at the tunnel yet"
+                : Rs2Player.isMoving() ? "moving" : herbiboarAt(tunnel) != null ? "boar already out" : null;
+        if (why != null) {
+            preHoverNote(tunnel, why);
+            return false;
+        }
+        java.awt.Point at = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            var c = Microbot.getClient();
+            LocalPoint lp = LocalPoint.fromWorld(c.getTopLevelWorldView(), tile);
+            Point p = lp == null ? null : Perspective.localToCanvas(c, lp, tile.getPlane(), BOAR_BODY_HEIGHT);
+            return p == null ? null : new java.awt.Point(p.getX(), p.getY());
+        }).orElse(null);
+        if (at == null || !insideViewport(new Rectangle(at.x, at.y, 1, 1)) || covered(at.x, at.y, panels())) {
+            preHoverNote(tunnel, "spot " + (at == null ? "not projected" : at.x + "," + at.y + " not clickable") + " (tile " + tile + ")");
+            return false;
+        }
+        if (Microbot.getMouse().getMousePosition().distance(at) <= PRE_HOVER_NEAR_PX) return true;
+        int x = at.x + Rs2Random.betweenInclusive(-3, 3), y = at.y + Rs2Random.betweenInclusive(-3, 3);
+        Microbot.getNaturalMouse().moveTo(x, y);
+        lastMoveEnd = System.currentTimeMillis();
+        preHoverAim = new java.awt.Point(x, y);
+        return true;
+    }
+
+    enum BoarWait { PRE_HOVER, MOUSE_AWAY, NOTHING }
+
+    static BoarWait boarWaitChoice(boolean relaxed, double roll, double preHoverChance) {
+        if (!relaxed || roll < preHoverChance) return BoarWait.PRE_HOVER;
+        return roll < preHoverChance + 0.15 ? BoarWait.MOUSE_AWAY : BoarWait.NOTHING;
+    }
+
+    private BoarWait boarWait;
+    private boolean glanced;
+
+    private void glanceAway() {
+        if (glanced) return;
+        glanced = true;
+        idle("glancing away");
+        int[] v = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            var c = Microbot.getClient();
+            return new int[]{c.getViewportXOffset() + c.getViewportWidth(), c.getViewportYOffset(), c.getViewportHeight()};
+        }).orElse(null);
+        if (v == null) return;
+        Microbot.getNaturalMouse().moveTo(v[0] + Rs2Random.betweenInclusive(3, 8), v[1] + v[2] / 4 + Rs2Random.betweenInclusive(0, v[2] / 2));
+        lastMoveEnd = System.currentTimeMillis();
+    }
+
+    private String lastPreHoverNote;
+
+    private void preHoverNote(WorldPoint tunnel, String why) {
+        String note = tunnel + ": " + why;
+        if (note.equals(lastPreHoverNote)) return;
+        lastPreHoverNote = note;
+        Microbot.log(Level.INFO, "Boar spot not hovered at " + note);
+    }
+
+    /** The emerging boar never offers Harvest. */
+    private static Rs2NpcModel harvestableBoarAt(WorldPoint tunnel) {
+        if (tunnel == null) return null;
+        return Microbot.getRs2NpcCache().query().withName("Herbiboar").where(HerbiboarScript::canHarvest)
+                .nearestOnClientThread(tunnel, HERBIBOAR_TUNNEL_RADIUS);
+    }
+
+    private static Rs2NpcModel herbiboarAt(WorldPoint tunnel) {
+        if (tunnel == null) return null;
+        return Microbot.getRs2NpcCache().query().withName("Herbiboar")
+                .nearestOnClientThread(tunnel, HERBIBOAR_TUNNEL_RADIUS);
+    }
+
+    /** Interaction timing is tick-based, not wall-clock. */
+    private static int tickCount() {
+        return Microbot.getClientThread().runOnClientThreadOptional(
+                () -> Microbot.getClient().getTickCount()).orElse(0);
+    }
+
+    
+    static int lowestDoseHeld(IntPredicate held, int... idsLowestFirst) {
+        for (int id : idsLowestFirst) {
+            if (held.test(id)) {
+                return id;
+            }
+        }
+        return -1;
+    }
+
+    private void consumeLowestDose(String action, int... idsLowestFirst) {
+        int id = lowestDoseHeld(held -> Rs2Inventory.contains(held), idsLowestFirst);
+        if (id != -1) {
+            useItem(id, action);
+            lastDrinkAt = Instant.now();
+            drinkCooldownMs = nextDrinkCooldownMs();
+        }
+    }
+
+    private void useItem(int id, String action) {
+        backToInventory();
+        Rs2ItemModel item = Rs2Inventory.get(id);
+        if (item != null && Rs2Inventory.hover(item)) {
+            sleep(Rs2Random.betweenInclusive(60, 140));
+            if (sleepUntil(() -> {
+                MenuEntry top = topMenuEntry();
+                return top != null && action.equalsIgnoreCase(top.getOption()) && top.getItemId() == id;
+            }, 300)) {
+                java.awt.Point at = Microbot.getMouse().getMousePosition();
+                Microbot.getMouse().click(new Point(at.x, at.y));
+                return;
+            }
+        }
+        Rs2Inventory.interact(id, action);
+    }
+
+    private static int nextDrinkCooldownMs() {
+        return Math.max(4000, Rs2Random.randomGaussian(6000, 1200));
+    }
+
+    /** Never with a click queued (an inventory click cancels it) or mid-action (the server drops it). */
+    private void upkeep() {
+        backToInventory();
+        dropConfiguredItems(config);
+        openHerbSack(config);
+        manageRunEnergy(config);
+    }
+
+    private void backToInventory() {
+        // Asked of the widget: Rs2Tab's cached tab can be stale (still INVENTORY with the world switcher up).
+        if (Rs2Bank.isOpen() || inventoryShown()) return;
+        Widget tab = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            Widget[] roots = Microbot.getClient().getWidgetRoots();
+            if (roots == null) return null;
+            for (Widget w : roots) {
+                Widget found = withAction(w, "Inventory");
+                if (found != null) return found;
+            }
+            return null;
+        }).orElse(null);
+        Microbot.log(Level.INFO, "Inventory is not showing; back to it");
+        if (tab != null) {
+            Rs2Widget.clickWidget(tab);
+        } else {
+            int key = InterfaceTab.INVENTORY.getHotkey();
+            if (key != -1) Rs2Keyboard.keyPress(key);
+        }
+        sleepUntil(this::inventoryShown, 1200);
+    }
+
+    private boolean inventoryShown() {
+        return Rs2Widget.isWidgetVisible(InterfaceID.Inventory.ITEMS);
+    }
+
+    private static Widget withAction(Widget w, String action) {
+        if (w == null || w.isHidden()) return null;
+        if (w.getActions() != null && Arrays.asList(w.getActions()).contains(action)) return w;
+        for (Widget[] kids : new Widget[][]{w.getStaticChildren(), w.getDynamicChildren(), w.getNestedChildren()}) {
+            if (kids == null) continue;
+            for (Widget k : kids) {
+                Widget found = withAction(k, action);
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
+    private boolean inDeadTime() {
+        if (Rs2Player.isAnimating()) return false;
+        if (state == HerbiboarState.TUNNEL && attackedTunnel && plugin.getFinishId() == 0) return true;
+        boolean trailWork = state == HerbiboarState.START || state == HerbiboarState.TRAIL
+                || state == HerbiboarState.TUNNEL || state == HerbiboarState.HARVEST;
+        return !trailWork && inFlight == null && !Rs2Player.isMoving();
+    }
+
+    private void manageRunEnergy(HerbiboarConfig config) {
+        // A drink takes a moment to register; without this the same potion goes down on consecutive passes.
+        if (!Instant.now().isAfter(lastDrinkAt.plusMillis(drinkCooldownMs))) {
+            return;
+        }
+        HerbiboarConfig.RunEnergyOption energyOption = config.runEnergyOption();
+        // hasStaminaActive reads the live varbit; hasStaminaBuffActive is a stale static.
+        if (!shouldUseEnergyItem(energyOption, config.stamBuffAlwaysActive(), Rs2Player.hasStaminaActive(),
+                Rs2Player.getRunEnergy(), config.thresholdEnergy())) {
+            return;
+        }
+        switch (energyOption) {
+            case STAMINA_POTION:
+                consumeLowestDose("Drink", ItemID._1DOSESTAMINA, ItemID._2DOSESTAMINA, ItemID._3DOSESTAMINA, ItemID._4DOSESTAMINA);
+                break;
+            case SUPER_ENERGY_POTION:
+                consumeLowestDose("Drink", ItemID._1DOSE2ENERGY, ItemID._2DOSE2ENERGY, ItemID._3DOSE2ENERGY, ItemID._4DOSE2ENERGY);
+                break;
+            case ENERGY_POTION:
+                consumeLowestDose("Drink", ItemID._1DOSE1ENERGY, ItemID._2DOSE1ENERGY, ItemID._3DOSE1ENERGY, ItemID._4DOSE1ENERGY);
+                break;
+            case STRANGE_FRUIT:
+                if (Rs2Inventory.contains(ItemID.MACRO_TRIFFIDFRUIT)) {
+                    useItem(ItemID.MACRO_TRIFFIDFRUIT, "Eat");
+                }
+                break;
+            case NONE:
+            default:
+                break;
+        }
+    }
+
+    /** One stamina dose at a time: a second while it runs is wasted. Pure. */
+    static boolean shouldUseEnergyItem(HerbiboarConfig.RunEnergyOption option, boolean keepStaminaUp, boolean staminaActive,
+                                       int energy, int threshold) {
+        switch (option) {
+            case NONE:
+                return false;
+            case STAMINA_POTION:
+                if (staminaActive && energy > 15) return false;
+                return keepStaminaUp || energy <= threshold;
+            default:
+                return energy <= threshold;
+        }
+    }
+    
+    /** Only an open herb sack catches herbs as they are harvested. */
+    private void openHerbSack(HerbiboarConfig config) {
+        if (!config.useHerbSack()) return;
+        for (int id : HERB_SACKS_CLOSED) {
+            if (Rs2Inventory.contains(id)) {
+                useItem(id, "Open");
+                Rs2Inventory.waitForInventoryChanges(1200);
+                return;
+            }
+        }
+    }
+
+    private void dropConfiguredItems(HerbiboarConfig config) {
+        dropIfPresent(itemsToDrop(config).stream().mapToInt(Integer::intValue).toArray());
+    }
+
+    static List<Integer> itemsToDrop(HerbiboarConfig config) {
+        List<Integer> ids = new ArrayList<>();
+        if (config.dropEmptyVials()) ids.add(ItemID.VIAL_EMPTY);
+        if (config.dropSmallFossil()) ids.addAll(Arrays.asList(ItemID.FOSSIL_SMALL_UNID, ItemID.FOSSIL_SMALL_1,
+                ItemID.FOSSIL_SMALL_2, ItemID.FOSSIL_SMALL_3, ItemID.FOSSIL_SMALL_4, ItemID.FOSSIL_SMALL_5));
+        if (config.dropMediumFossil()) ids.addAll(Arrays.asList(ItemID.FOSSIL_MEDIUM_UNID, ItemID.FOSSIL_MEDIUM_1,
+                ItemID.FOSSIL_MEDIUM_2, ItemID.FOSSIL_MEDIUM_3, ItemID.FOSSIL_MEDIUM_4, ItemID.FOSSIL_MEDIUM_5));
+        if (config.dropLargeFossil()) ids.addAll(Arrays.asList(ItemID.FOSSIL_LARGE_UNID, ItemID.FOSSIL_LARGE_1,
+                ItemID.FOSSIL_LARGE_2, ItemID.FOSSIL_LARGE_3, ItemID.FOSSIL_LARGE_4, ItemID.FOSSIL_LARGE_5));
+        if (config.dropRareFossil()) ids.addAll(Arrays.asList(ItemID.FOSSIL_RARE_UNID, ItemID.FOSSIL_RARE_1,
+                ItemID.FOSSIL_RARE_2, ItemID.FOSSIL_RARE_3, ItemID.FOSSIL_RARE_4, ItemID.FOSSIL_RARE_5, ItemID.FOSSIL_RARE_6));
+        if (config.dropGuam()) ids.add(ItemID.UNIDENTIFIED_GUAM);
+        if (config.dropMarrentill()) ids.add(ItemID.UNIDENTIFIED_MARENTILL);
+        if (config.dropTarromin()) ids.add(ItemID.UNIDENTIFIED_TARROMIN);
+        if (config.dropHarralander()) ids.add(ItemID.UNIDENTIFIED_HARRALANDER);
+        if (config.dropRanarr()) ids.add(ItemID.UNIDENTIFIED_RANARR);
+        if (config.dropToadflax()) ids.add(ItemID.UNIDENTIFIED_TOADFLAX);
+        if (config.dropIrit()) ids.add(ItemID.UNIDENTIFIED_IRIT);
+        if (config.dropAvantoe()) ids.add(ItemID.UNIDENTIFIED_AVANTOE);
+        if (config.dropKwuarm()) ids.add(ItemID.UNIDENTIFIED_KWUARM);
+        if (config.dropSnapdragon()) ids.add(ItemID.UNIDENTIFIED_SNAPDRAGON);
+        if (config.dropCadantine()) ids.add(ItemID.UNIDENTIFIED_CADANTINE);
+        if (config.dropLantadyme()) ids.add(ItemID.UNIDENTIFIED_LANTADYME);
+        if (config.dropDwarfWeed()) ids.add(ItemID.UNIDENTIFIED_DWARF_WEED);
+        if (config.dropTorstol()) ids.add(ItemID.UNIDENTIFIED_TORSTOL);
+        return ids;
+    }
+
+    private void dropIfPresent(int... itemIds) {
+        for (int itemId : itemIds) {
+            if (Rs2Inventory.contains(itemId)) {
+                Rs2Inventory.drop(itemId);
+            }
+        }
+    }
+
+    private boolean needsToBank(HerbiboarConfig config) {
+        int empty = Rs2Inventory.emptySlotCount();
+        boolean setupOk = hasRequiredInventorySetup(config);
+        boolean bank = shouldBank(empty, setupOk);
+        if (bank && state != HerbiboarState.BANK) {
+            Microbot.log(Level.INFO, "Banking: " + empty + " free slots" + (setupOk ? "" : ", setup incomplete (" + config.runEnergyOption()
+                    + (config.useHerbSack() && !Rs2Inventory.contains(HERB_SACKS) ? ", no herb sack" : "") + ")"));
+        }
+        return bank;
+    }
+
+    static boolean shouldBank(int emptySlots, boolean setupOk) {
+        return emptySlots == 0 || !setupOk;
+    }
+
+    private boolean hasRequiredInventorySetup(HerbiboarConfig config) {
+        return setupOk(hasEnergyItems(config), config.useHerbSack(), Rs2Inventory.contains(HERB_SACKS),
+                config.useMagicSecateurs(), Rs2Equipment.isWearing(ItemID.FAIRY_ENCHANTED_SECATEURS)
+                        || Rs2Inventory.contains(ItemID.FAIRY_ENCHANTED_SECATEURS));
+    }
+
+    static boolean setupOk(boolean energyOk, boolean useSack, boolean hasSack, boolean useSecateurs, boolean hasSecateurs) {
+        return energyOk && (!useSack || hasSack) && (!useSecateurs || hasSecateurs);
+    }
+
+    static boolean shouldRestock(boolean restockOn, boolean energyOk, HerbiboarConfig.RunEnergyOption option) {
+        return restockOn && !energyOk && fullDoseItemId(option) != -1;
+    }
+
+    private static boolean hasEnergyItems(HerbiboarConfig config) {
+        HerbiboarConfig.RunEnergyOption energyOption = config.runEnergyOption();
+        boolean hasEnergyItems;
+        switch (energyOption) {
+            case STAMINA_POTION:
+                hasEnergyItems = Rs2Inventory.contains(ItemID._4DOSESTAMINA, ItemID._3DOSESTAMINA, ItemID._2DOSESTAMINA, ItemID._1DOSESTAMINA);
+                break;
+            case SUPER_ENERGY_POTION:
+                hasEnergyItems = Rs2Inventory.contains(ItemID._4DOSE2ENERGY, ItemID._3DOSE2ENERGY, ItemID._2DOSE2ENERGY, ItemID._1DOSE2ENERGY);
+                break;
+            case ENERGY_POTION:
+                hasEnergyItems = Rs2Inventory.contains(ItemID._4DOSE1ENERGY, ItemID._3DOSE1ENERGY, ItemID._2DOSE1ENERGY, ItemID._1DOSE1ENERGY);
+                break;
+            case STRANGE_FRUIT:
+                hasEnergyItems = Rs2Inventory.contains(ItemID.MACRO_TRIFFIDFRUIT);
+                break;
+            case NONE:
+            default:
+                hasEnergyItems = true;
+                break;
+        }
+        return hasEnergyItems;
+    }
+    private void ensureEnergyDoses(HerbiboarConfig.RunEnergyOption option, int targetDoses) {
+        int fullDoseId = fullDoseItemId(option);
+        if (fullDoseId == -1 || !Rs2Bank.isOpen()) return;
+        int wanted = Math.max(1, targetDoses / 4);
+        if (Rs2Inventory.count(fullDoseId) >= wanted) return;
+        if (Rs2Bank.count(fullDoseId) > 0) {
+            Rs2Bank.withdrawX(fullDoseId, wanted - Rs2Inventory.count(fullDoseId));
+            Rs2Inventory.waitForInventoryChanges(2000);
+            return;
+        }
+        // bankedDoses counts partial potions, so they must be usable or the bank reads stocked but gives nothing
+        int left = wanted;
+        int[] ids = doseIds(option);
+        for (int i = ids.length - 2; i >= 0 && left > 0; i--) {
+            int take = Math.min(left, Rs2Bank.count(ids[i]));
+            if (take == 0) continue;
+            Rs2Bank.withdrawX(ids[i], take);
+            Rs2Inventory.waitForInventoryChanges(2000);
+            left -= take;
+        }
+    }
+
+    static int fullDoseItemId(HerbiboarConfig.RunEnergyOption option) {
+        switch (option) {
+            case STAMINA_POTION: return ItemID._4DOSESTAMINA;
+            case SUPER_ENERGY_POTION: return ItemID._4DOSE2ENERGY;
+            case ENERGY_POTION: return ItemID._4DOSE1ENERGY;
+            default: return -1;
+        }
+    }
+
+    /** Its tick deadline cannot be pushed back by moving. */
+    private static final class InFlight {
+        final WorldPoint target;
+        final Object snapshot;
+        final int deadlineTick;
+        final String what;
+        final int dispatchTick = tickCount();
+
+        InFlight(WorldPoint target, Object snapshot, int deadlineTick, String what) {
+            this.target = target;
+            this.snapshot = snapshot;
+            this.deadlineTick = deadlineTick;
+            this.what = what;
+        }
+    }
+
+    private InFlight inFlight;
+    private final java.util.concurrent.atomic.AtomicBoolean passRunning = new java.util.concurrent.atomic.AtomicBoolean();
+    private HerbiHunterPlugin plugin;
+    private HerbiboarConfig config;
+    private WorldPoint skipStart;
+    private String lastIdleReason;
+    private HerbiboarState lastPolledState;
+
+    private void idle(String reason) {
+        activity = reason;
+        if (!reason.equals(lastIdleReason)) {
+            lastIdleReason = reason;
+            Microbot.log(Level.INFO, "Waiting: " + reason);
+        }
+    }
+
+    private void settled() {
+        activity = null;
+        lastIdleReason = null;
+    }
+
+    private void clearInFlight() {
+        inFlight = null;
+        lastIdleReason = null;
+        activity = null;
+    }
+
+    private boolean waitingOn(WorldPoint loc, Supplier<Object> progress) {
+        if (inFlight == null) return false;
+        boolean progressChanged = !Objects.equals(progress.get(), inFlight.snapshot);
+        boolean deadlinePassed = tickCount() >= inFlight.deadlineTick;
+        boolean differentTarget = loc != null && !loc.equals(inFlight.target);
+        if (!progressChanged && hitInterrupted(plugin.getLastHitTick(), inFlight.dispatchTick,
+                tickCount(), Rs2Player.isMoving() || Rs2Player.isAnimating())) {
+            Rs2NpcModel attacker = Microbot.getRs2NpcCache().query()
+                .where(n -> !"Herbiboar".equals(n.getName()) && n.isInteractingWithPlayer()).first();
+            Microbot.log(Level.INFO, "Hit by " + (attacker == null ? "an NPC" : attacker.getName()) + " during "
+                + inFlight.what + (state == HerbiboarState.START ? "; trying another start" : "; clicking again"));
+            if (state == HerbiboarState.START) { skipStart = inFlight.target; startTarget = null; startChosen = false; }
+            clearInFlight();
+            if (!Rs2Combat.setAutoRetaliate(false)) Microbot.log(Level.WARN, "Could not turn auto retaliate off");
+            return false;
+        }
+        if (progressChanged) {
+            unansweredCount = 0;
+            // End this pass so the next decides from the new state: carrying on re-attacks an emptied tunnel.
+            clearInFlight();
+            sleep(reactionMs());
+            if (lapseAllowed(state, herbiboarAt(huntTunnel) != null, inFlight != null)) {
+                long lapse = pace().lapseMs(paceRng);
+                if (lapse > 0) {
+                    idle("taking a moment");
+                    sleep((int) lapse);
+                    settled();
+                }
+            }
+            if (!Rs2Player.isMoving() && sleepUntil(() -> !Rs2Player.isAnimating(), 1200)) upkeep();
+            return true;
+        }
+        if (dispatchResolved(false, deadlinePassed, differentTarget)) {
+            if (deadlinePassed && !progressChanged) {
+                Microbot.log(Level.INFO, "No answer to " + inFlight.what + " within "
+                        + DISPATCH_DEADLINE_TICKS + " ticks; retrying");
+                if (state == HerbiboarState.START) { skipStart = inFlight.target; startTarget = null; startChosen = false; }
+                noteUnanswered(inFlight.target);
+            }
+            clearInFlight();
+            return false;
+        }
+        if (state == HerbiboarState.TRAIL && Rs2Player.isAnimating()) driftCameraWhileSearching();
+        idle(inFlight.what);
+        return true;
+    }
+
+    static boolean hitInterrupted(int hitTick, int dispatchTick, int now, boolean busy) {
+        return hitTick > dispatchTick && now >= hitTick + 2 && !busy;
+    }
+
+    private WorldPoint unansweredAt;
+    private int unansweredCount;
+    private WorldPoint relogTriedFor;
+    private volatile boolean relogPending;
+
+    /** The game can ignore a correct Inspect for minutes; a relog starts a fresh trail. */
+    private void noteUnanswered(WorldPoint target) {
+        if (target == null || state != HerbiboarState.TRAIL) return;
+        if (target.equals(unansweredAt)) unansweredCount++;
+        else {
+            unansweredAt = target;
+            unansweredCount = 1;
+        }
+        if (unansweredCount >= 2) {
+            String dump = Microbot.getClientThread().runOnClientThreadOptional(() -> plugin.trailDump()).orElse("?");
+            Microbot.log(Level.INFO, "[HB-STUCK] %s unanswered %dx; trail: %s", target, unansweredCount, dump);
+        }
+        if (trailIsStuck(unansweredCount) && !target.equals(relogTriedFor)) {
+            relogTriedFor = target;
+            unansweredCount = 0;
+            Microbot.log(Level.WARN, "The trail is stuck at " + target + " (no answer 3 times); logging out and back in for a fresh trail");
+            relogPending = true;
+        }
+    }
+
+    static boolean trailIsStuck(int unansweredSearches) {
+        return unansweredSearches >= 3;
+    }
+
+    private final java.util.Random paceRng = new java.util.Random();
+    private HerbiboarPace sessionRelaxed;
+
+    /** The same instance every time, so switching keeps the personality. */
+    static HerbiboarPace choose(HerbiboarConfig.PlayStyle style, HerbiboarPace sessionRelaxed) {
+        return style == HerbiboarConfig.PlayStyle.FOCUSED || sessionRelaxed == null ? HerbiboarPace.focused() : sessionRelaxed;
+    }
+
+    private HerbiboarPace sessionFocused;
+    private HerbiboarHabits habits = HerbiboarHabits.draw(0);
+    private double annoyance, breakingPoint = 1;
+    private WorldPoint annoyanceJudged;
+
+    private HerbiboarPace pace() {
+        HerbiboarPace p = choose(config.playStyle(), sessionRelaxed);
+        return p.isRelaxed() || sessionFocused == null ? p : sessionFocused;
+    }
+
+    private int reactionMs() {
+        return pace().reactionMs(System.currentTimeMillis(), paceRng);
+    }
+
+    static String antibanOverride(boolean universal, boolean overwrite) {
+        if (universal && overwrite) return "Universal antiban, Overwrite script settings";
+        return universal ? "Universal antiban" : overwrite ? "Overwrite script settings" : null;
+    }
+
+    static boolean lapseAllowed(HerbiboarState state, boolean boarOut, boolean clickPending) {
+        return (state == HerbiboarState.TRAIL || state == HerbiboarState.START) && !boarOut && !clickPending;
+    }
+
+    static boolean distractionAllowed(HerbiboarState s, boolean boarOut) {
+        return s != HerbiboarState.TUNNEL && s != HerbiboarState.HARVEST && !boarOut;
+    }
+
+    private InFlight driftChecked;
+
+    /** The default tolerance would swallow a 10-25 degree turn. */
+    static final int DRIFT_TOLERANCE_MIN = 2, DRIFT_TOLERANCE_MAX = 5;
+
+    private void driftCameraWhileSearching() {
+        if (driftChecked == inFlight) return;
+        driftChecked = inFlight;
+        if (!distractionAllowed(state, herbiboarAt(huntTunnel) != null)
+                || !pace().driftCameraDuringSearch(paceRng)) return;
+        idle("looking around");
+        int sign = paceRng.nextBoolean() ? 1 : -1;
+        turnCameraTo(Math.floorMod(Rs2Camera.getAngle() + sign * Rs2Random.betweenInclusive(10, 25), 360),
+            Rs2Random.betweenInclusive(DRIFT_TOLERANCE_MIN, DRIFT_TOLERANCE_MAX), () -> false);
+    }
+
+    private void glanceAtXp() {
+        int[] v = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            Client c = Microbot.getClient();
+            return new int[]{c.getViewportXOffset() + c.getViewportWidth(), c.getViewportYOffset()};
+        }).orElse(null);
+        if (v == null) return;
+        idle("checking xp");
+        Microbot.getNaturalMouse().moveTo(v[0] - Rs2Random.betweenInclusive(90, 140), v[1] + Rs2Random.betweenInclusive(20, 70));
+        sleep(Rs2Random.betweenInclusive(400, 1200));
+    }
+
+    private void lookAtSkills() {
+        idle("looking at skills");
+        Widget tab = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            Widget[] roots = Microbot.getClient().getWidgetRoots();
+            if (roots == null) return null;
+            for (Widget w : roots) {
+                Widget found = withAction(w, "Skills");
+                if (found != null) return found;
+            }
+            return null;
+        }).orElse(null);
+        if (tab != null) {
+            Rs2Widget.clickWidget(tab);
+        } else {
+            int key = InterfaceTab.SKILLS.getHotkey();
+            if (key == -1) return;
+            Rs2Keyboard.keyPress(key);
+        }
+        sleepUntil(() -> Rs2Widget.findWidget("Hunter", false) != null, 1500);
+        Widget hunter = Rs2Widget.findWidget("Hunter", false);
+        if (hunter != null && hunter.getBounds() != null) {
+            Rectangle b = hunter.getBounds();
+            Microbot.getNaturalMouse().moveTo(b.x + b.width / 2 + Rs2Random.betweenInclusive(-b.width / 4, b.width / 4),
+                b.y + b.height / 2 + Rs2Random.betweenInclusive(-b.height / 4, b.height / 4));
+        }
+        sleep(Rs2Random.betweenInclusive(800, 2000));
+        sleep(Rs2Random.betweenInclusive(70, 110));
+        backToInventory();
+    }
+
+    private void afterCatchDistraction() {
+        switch (pace().afterCatch(paceRng)) {
+            case XP_GLANCE: glanceAtXp(); break;
+            case SKILL_TAB: lookAtSkills(); break;
+            default: break;
+        }
+        settled();
+    }
+
+    static boolean dispatchResolved(boolean progressChanged, boolean deadlinePassed,
+                                    boolean differentTarget) {
+        return progressChanged || deadlinePassed || differentTarget;
+    }
+
+    private boolean approachAndInteract(TileObject object, WorldPoint loc, String action,
+                                        Supplier<Object> progress, HerbiboarConfig config) {
+        if (loc == null) return false;
+        showRoute(loc);
+        if (waitingOn(loc, progress)) return false;
+        // Cross the hole first: clicking an object on its far side paths the long way round.
+        WorldPoint from = Rs2Player.getWorldLocation();
+        if (useHole(from, loc)) {
+            tryHoleShortcut();
+            return false;
+        }
+        if (object == null) {
+            // Not in the loaded scene yet; walking there loads it, so arrival = it loaded (not a distance check).
+            if (!minimapStepToward(loc, () -> plugin.getTrailObjects().get(loc) != null
+                    || plugin.getTunnels().get(loc) != null || plugin.getStarts().get(loc) != null)) {
+                travelTo(loc, () -> false, config);
+            }
+            idle("walking to load " + loc);
+            return false;
+        }
+        if (from != null && !onScreen(object)) {
+            int objectAngle = Rs2Camera.getObjectAngle(object);
+            int off = Rs2Camera.getAngleTo(objectAngle);
+            Shape seen = hullOf(object);
+            if (seen != null && !partlyInView(seen.getBounds())
+                    && smallTurnShows(from.distanceTo(loc), true, off, habits.turnMaxDeg,
+                            Math.min(habits.clickRangeTiles, TURN_SHOWS_MAX_TILES))
+                    && habits.turnsFor(off, paceRng)) {
+                Microbot.log(Level.INFO, "Turning the camera " + Math.abs(off) + " deg to " + loc + " rather than walking to it");
+                // A tight stop tolerance, or the turn ends still out of view.
+                turnCameraTo(objectAngle, Rs2Random.betweenInclusive(DRIFT_TOLERANCE_MIN, DRIFT_TOLERANCE_MAX),
+                        () -> comfortablyInView(hullOf(object)));
+            }
+        }
+        if (from != null && !loc.equals(annoyanceJudged)
+                && from.distanceTo(loc) <= Math.min(habits.clickRangeTiles, TURN_SHOWS_MAX_TILES)) {
+            annoyanceJudged = loc;
+            int off = Rs2Camera.getAngleTo(Rs2Camera.getObjectAngle(object));
+            annoyance = habits.annoyance(annoyance, off, paceRng);
+            if (annoyance >= breakingPoint) {
+                int to = HerbiboarHabits.turnAroundTarget(Rs2Camera.getAngle(), off, habits.turnMaxDeg, paceRng);
+                Microbot.log(Level.INFO, String.format(java.util.Locale.ENGLISH,
+                        "[HB-TURNROUND] %d deg off %s, annoyance %.2f >= %.2f: turning to %d", off, loc, annoyance, breakingPoint, to));
+                turnCameraTo(to, Rs2Random.betweenInclusive(3, 12), () -> false);
+                annoyance = 0;
+                breakingPoint = habits.breakingPoint(paceRng);
+            }
+        }
+        if (from != null && walkFirst(onScreen(object), from.distanceTo(loc), habits.clickRangeTiles)) {
+            Shape wh = hullOf(object);
+            Microbot.log(Level.INFO, String.format(java.util.Locale.ENGLISH, "[HB-WALK] %s: %d tiles, %s, camera %d deg off it",
+                    loc, from.distanceTo(loc),
+                    from.distanceTo(loc) > habits.clickRangeTiles ? "out of click range"
+                            : wh == null ? "not drawn" : partlyInView(wh.getBounds()) ? "partly in view" : "out of view",
+                    Rs2Camera.getAngleTo(Rs2Camera.getObjectAngle(object))));
+            BooleanSupplier inReach = () -> onScreen(object) && Rs2Player.getWorldLocation().distanceTo(loc) <= habits.clickRangeTiles;
+            if (!minimapStepToward(loc, inReach)) {
+                travelTo(loc, inReach, config);
+            }
+            idle("closing on " + loc);
+            return false;
+        }
+        if (!clickWhenVisible(Rs2Camera.getObjectAngle(object), () -> hullOf(object), loc)) return false;
+        if (!hoverOnce(() -> hullOf(object), () -> Rs2Camera.getObjectAngle(object), withKnownBlocker(loc, overlappingTrailHulls(object)))) {
+            if (!minimapStepToward(loc, () -> onScreen(object))) travelTo(loc, () -> onScreen(object), config);
+            idle("closing on " + loc + " to aim");
+            return false;
+        }
+        if (!clickUnderCursor(action, object.getId(), () -> hullOf(object), () -> model(object).click(action), loc,
+                () -> Rs2Camera.getObjectAngle(object))) return false;
+        int walkTicks = from == null ? 0 : from.distanceTo(loc);
+        inFlight = new InFlight(loc, progress.get(), tickCount() + DISPATCH_DEADLINE_TICKS + walkTicks,
+                action + " " + loc);
+        lastIdleReason = null;
+        return true;
+    }
+
+    /** One client-thread hop for the whole scan: a worldToMinimap per tile off it waits a frame each. */
+    private static WorldPoint furthestOnMinimap(List<WorldPoint> path, WorldPoint from) {
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> furthestOnMinimapNow(path, from)).orElse(null);
+    }
+
+    private static WorldPoint furthestOnMinimapNow(List<WorldPoint> path, WorldPoint from) {
+        int end = path.size();
+        for (int i = 0; i + 1 < path.size(); i++) {
+            if (path.get(i).distanceTo(path.get(i + 1)) > 2) {
+                end = i + 1;
+                break;
+            }
+        }
+        int visible = 0;
+        for (int i = 0; i < end; i++) {
+            Point p = Rs2MiniMap.worldToMinimap(path.get(i));
+            if (p != null && Rs2MiniMap.isPointInsideMinimap(p)) visible = Math.max(visible, path.get(i).distanceTo(from));
+        }
+        int reach = minimapReach(visible, Rs2Random.dicePercentage(MINIMAP_SHORT_HOP_PERCENT), Math.random());
+        for (int i = end - 1; i >= 0; i--) {
+            if (path.get(i).distanceTo(from) > reach) continue;
+            Point p = Rs2MiniMap.worldToMinimap(path.get(i));
+            if (p != null && Rs2MiniMap.isPointInsideMinimap(p)) return path.get(i);
+        }
+        return null;
+    }
+
+    static int minimapReach(int visible, boolean shortHop, double u) {
+        int floor = Math.min(MINIMAP_REACH_MIN, visible);
+        if (visible <= floor) return visible;
+        int lo = shortHop ? floor : Math.max(floor, (int) Math.ceil(visible * MINIMAP_OUTER_BAND));
+        return Math.min(visible, lo + (int) (u * (visible - lo + 1)));
+    }
+
+    private WorldPoint routeFor;
+
+    private void showRoute(WorldPoint to) {
+        WorldPoint me = Rs2Player.getWorldLocation();
+        if (to == null || me == null) return;
+        List<WorldPoint> shown = plugin.getWalkRoute();
+        int at = HerbiHunterPlugin.routeAheadFrom(shown, me);
+        if (to.equals(routeFor) && (at < 0 || shown.get(at).distanceTo(me) <= 3)) return;
+        routeFor = to;
+        plugin.setWalkRoute(Rs2Walker.getWalkPath(me, to));
+    }
+
+    private void clearRoute() {
+        routeFor = null;
+        plugin.setWalkRoute(Collections.emptyList());
+    }
+
+    /** The walker keeps turning the camera toward its target for up to 5s otherwise. */
+    private static void dropWalkerRoute() {
+        Rs2Walker.setTarget(null, "herbiboar: leg finished, our own clicks take over");
+    }
+
+    private boolean minimapStepToward(WorldPoint loc, BooleanSupplier arrived) {
+        WorldPoint from = Rs2Player.getWorldLocation();
+        if (from == null) return false;
+        List<WorldPoint> path = Rs2Walker.getWalkPath(from, loc);
+        WorldPoint step = furthestOnMinimap(path.isEmpty() ? Collections.singletonList(loc) : path, from);
+        if (step == null || step.distanceTo(from) <= 1) return false;
+        dropWalkerRoute();
+        // Glide over first: clicking cold presses at full speed, a one-frame jump that reads as a teleport.
+        Point dot = Rs2MiniMap.worldToMinimap(step);
+        java.awt.Point mouse = Microbot.getMouse().getMousePosition();
+        if (dot != null && (mouse == null || mouse.distance(dot.getX(), dot.getY()) > MINIMAP_HOVER_PX)) {
+            Microbot.getNaturalMouse().moveTo(dot.getX(), dot.getY());
+            sleep(Rs2Random.betweenInclusive(70, 180));
+        }
+        if (!Rs2Walker.walkMiniMap(step)) return false;
+        int early = Rs2Random.betweenInclusive(2, 5);
+        long stillAfter = System.currentTimeMillis() + Rs2Random.betweenInclusive(1100, 1700);
+        sleepUntil(() -> arrived.getAsBoolean()
+                || Rs2Player.getWorldLocation().distanceTo(step) <= early
+                || (System.currentTimeMillis() > stillAfter && !Rs2Player.isMoving()), 10000);
+        return true;
+    }
+
+    private void travelTo(WorldPoint loc, BooleanSupplier arrived, HerbiboarConfig config) {
+        travelTo(loc, 3, arrived);
+    }
+
+    /** @param within the walker's arrival radius; must match the caller's, or ARRIVED-without-a-step repeats forever. */
+    private void travelTo(WorldPoint loc, int within, BooleanSupplier arrived) {
+        WorldPoint from = Rs2Player.getWorldLocation();
+        // The walker routes to the hole and then walks round; we climb it ourselves.
+        if (useHole(from, loc)) {
+            tryHoleShortcut();
+            return;
+        }
+        WalkerState result = Rs2Walker.walkWithStateUntil(loc, within, arrived);
+        dropWalkerRoute();
+        WorldPoint now = Rs2Player.getWorldLocation();
+        boolean moved = from != null && !from.equals(now);
+        // ARRIVED without a step and without the caller's arrival is a stall, not an arrival.
+        if (moved || (result == WalkerState.ARRIVED && arrived.getAsBoolean())) {
+            stalledWalks = 0;
+            return;
+        }
+        stalledWalks++;
+        Microbot.log(Level.INFO, "Walk to " + loc + " ended as " + result + " without moving (stall " + stalledWalks + ")");
+        switch (stallAction(stalledWalks)) {
+            case RESET:
+                Microbot.log(Level.INFO, "Walking stalled " + stalledWalks + " times, resetting script state");
+                stalledWalks = 0;
+                setState(HerbiboarState.RESET);
+                break;
+            case SHORTCUT:
+                if (useHole(from, loc)) tryHoleShortcut();
+                break;
+            case CONTINUE:
+            default:
+                break;
+        }
+    }
+
+    private int stuckMinutes;
+
+    static boolean giveUpWhenStuck(int consecutiveStuckMinutes) {
+        return consecutiveStuckMinutes >= 3;
+    }
+
+    enum StallAction { CONTINUE, SHORTCUT, RESET }
+
+    static StallAction stallAction(int stalls) {
+        if (stalls >= STALLS_BEFORE_RESET) return StallAction.RESET;
+        if (stalls >= STALLS_BEFORE_SHORTCUT) return StallAction.SHORTCUT;
+        return StallAction.CONTINUE;
+    }
+
+    static boolean crossesHole(WorldPoint from, WorldPoint to) {
+        if (from == null || to == null) return false;
+        return (from.getY() < HOLE_DIVIDE_Y) != (to.getY() < HOLE_DIVIDE_Y);
+    }
+
+    /** A just-started trail has a group but no spots. Pure. */
+    static boolean trailIsLost(boolean pathEmpty, boolean noGroup) {
+        return pathEmpty && noGroup;
+    }
+
+    static WorldPoint nextTargetOf(int finishId, List<HerbiboarSearchSpot> path, List<WorldPoint> endLocations) {
+        if (validFinishId(finishId, endLocations.size())) return endLocations.get(finishId - 1);
+        return path.isEmpty() ? null : path.get(path.size() - 1).getLocation();
+    }
+
+    /** Tiles the hole climb is worth when comparing routes. */
+    static final int HOLE_ROUTE_PENALTY = 12;
+
+    static int routeCost(List<WorldPoint> path) {
+        if (path == null || path.isEmpty()) return -1;
+        return path.size() + (pathJumpsHole(path) ? HOLE_ROUTE_PENALTY : 0);
+    }
+
+    static WorldPoint nearestByRoute(List<WorldPoint> candidates, java.util.function.ToIntFunction<WorldPoint> cost,
+                                     WorldPoint skip) {
+        WorldPoint best = null;
+        int bestCost = Integer.MAX_VALUE;
+        for (WorldPoint c : candidates) {
+            if (c.equals(skip)) continue;
+            int n = cost.applyAsInt(c);
+            if (n >= 0 && n < bestCost) {
+                best = c;
+                bestCost = n;
+            }
+        }
+        return best;
+    }
+
+    private static int startRouteCost(WorldPoint me, WorldPoint rock) {
+        try {
+            List<WorldPoint> path = Rs2Walker.getWalkPath(me, rock);
+            // A rock is not walkable: a good path ends beside it (MIDDLE's nearest standable tile is 3-4 away).
+            if (path == null || path.isEmpty() || path.get(path.size() - 1).distanceTo(rock) > 5) {
+                Microbot.log(Level.INFO, "Start route to %s: no path (%s)", rock,
+                        path == null || path.isEmpty() ? "empty" : "ends " + path.get(path.size() - 1).distanceTo(rock) + " away");
+                return -1;
+            }
+            return routeCost(path);
+        } catch (Exception e) {
+            Microbot.log(Level.INFO, "Start route to %s: no path (%s)", rock, e.toString());
+            return -1;
+        }
+    }
+
+    private WorldPoint notedNext;
+    private WorldPoint startTarget;
+    private boolean startChosen;
+    private static final List<String> START_NAMES = List.of("MIDDLE", "LEPRECHAUN", "CAMP_ENTRANCE", "GHOST_MUSHROOM", "DRIFTWOOD");
+
+    static boolean breaksLocked(HerbiboarState s) {
+        return s == HerbiboarState.TRAIL || s == HerbiboarState.TUNNEL || s == HerbiboarState.HARVEST;
+    }
+
+    static boolean keepBreaksLockedAtBankExit(HerbiboarState resume) {
+        return resume != HerbiboarState.START;
+    }
+
+    /** A null location reads as on the island: nothing moves on a bad read. Pure. */
+    static boolean onFossilIsland(WorldPoint p) {
+        return p == null || p.getX() >= 3600 && p.getX() <= 3860 && p.getY() >= 3690 && p.getY() <= 3910;
+    }
+
+    static boolean needsTravel(HerbiboarState s, WorldPoint me) {
+        return s == HerbiboarState.START && !onFossilIsland(me);
+    }
+
+    static boolean pendantHelps(WorldPoint me) {
+        return me != null && me.distanceTo(DIGSITE) > PENDANT_MIN_TILES;
+    }
+
+    static boolean bankAllowedIn(HerbiboarState s) {
+        return s != HerbiboarState.INITIALIZING && s != HerbiboarState.CHECK_AUTO_RETALIATE && s != HerbiboarState.BANK
+                && s != HerbiboarState.RESTOCK && s != HerbiboarState.TUNNEL && s != HerbiboarState.HARVEST;
+    }
+
+    /** The next trail may fill the inventory: about 1 fossil with the sack, up to 5 slots without. Pure. */
+    static boolean bankAtCatch(int freeSlots, boolean useSack) {
+        return freeSlots < (useSack ? 2 : 6);
+    }
+
+    static HerbiboarState resumeState(int finishId, boolean hasTrail) {
+        if (finishId > 0) return HerbiboarState.TUNNEL;
+        return hasTrail ? HerbiboarState.TRAIL : HerbiboarState.START;
+    }
+
+    static boolean validFinishId(int finishId, int endLocationCount) {
+        return finishId > 0 && finishId <= endLocationCount;
+    }
+
+    private boolean tryHoleShortcut() {
+        if (Rs2Player.getRealSkillLevel(Skill.AGILITY) < HOLE_SHORTCUT_AGILITY) {
+            idle("hole needs " + HOLE_SHORTCUT_AGILITY + " Agility");
+            return false;
+        }
+        Rs2TileObjectModel hole = Microbot.getRs2TileObjectCache().query()
+                .withIds(HOLE_SHORTCUT_IDS).nearestOnClientThread(HOLE_SEARCH_DISTANCE);
+        if (hole == null) {
+            WorldPoint mouth = holeMouthNearest(Rs2Player.getWorldLocation());
+            idle("walking toward the hole at " + mouth);
+            Rs2Walker.walkWithStateUntil(mouth, 5, () -> Microbot.getRs2TileObjectCache().query()
+                    .withIds(HOLE_SHORTCUT_IDS).nearestOnClientThread(HOLE_SEARCH_DISTANCE) != null);
+            dropWalkerRoute();
+            return false;
+        }
+        WorldPoint holeAt = hole.getWorldLocation();
+        if (!onScreen(hole) && holeAt.distanceTo(Rs2Player.getWorldLocation()) > 6) {
+            idle(minimapStepToward(holeAt, () -> onScreen(hole)) ? "closing on the hole" : "hole is off the minimap");
+            return false;
+        }
+        if (!clickWhenVisible(Rs2Camera.getObjectAngle(hole), () -> hullOf(hole), holeAt)) return false;
+        if (!hoverOnce(() -> hullOf(hole), () -> Rs2Camera.getObjectAngle(hole))) {
+            idle("aiming at the hole");
+            return false;
+        }
+        WorldPoint before = Rs2Player.getWorldLocation();
+        if (!clickUnderCursor("Climb through", hole.getId(), () -> hullOf(hole), () -> hole.click("Climb through"), holeAt,
+                () -> Rs2Camera.getObjectAngle(hole))) return false;
+        Microbot.log(Level.INFO, "Clicking the hole to climb through it");
+        // Crossing the divide is the proof the climb happened.
+        sleepUntil(() -> crossesHole(before, Rs2Player.getWorldLocation()), HOLE_CLIMB_TIMEOUT_MS);
+        stalledWalks = 0;
+        return true;
+    }
+
+    public boolean run(HerbiboarConfig config, HerbiHunterPlugin herbiboarPlugin) {
+        plugin = herbiboarPlugin;
+        this.config = config;
+        // Script.run() drinks a stamina whenever energy is low and we are moving, which cancels a clicked object.
+        if (savedAutoRun == null) {
+            savedAutoRun = Microbot.enableAutoRunOn;
+            savedAutoStamina = Microbot.useStaminaPotsIfNeeded;
+        }
+        Microbot.enableAutoRunOn = false;
+        Microbot.useStaminaPotsIfNeeded = false;
+        Rs2Walker.disableTeleports = true;
+        // The walker scores mushtree, zip line and rowboat under walking, but they take about twice as long: off for the session.
+        if (savedMushtrees == null) {
+            Boolean set = Microbot.getConfigManager().getConfiguration(WALKER_CONFIG, MUSHTREES, Boolean.class);
+            // unset means the walker's default, on
+            savedMushtrees = set == null || set;
+        }
+        Microbot.getConfigManager().setConfiguration(WALKER_CONFIG, MUSHTREES, false);
+        setState(HerbiboarState.INITIALIZING);
+
+        sessionRelaxed = HerbiboarPace.relaxed(System.nanoTime(), System.currentTimeMillis());
+        sessionFocused = HerbiboarPace.focused(System.nanoTime());
+        habits = HerbiboarHabits.draw(System.nanoTime());
+        annoyance = 0;
+        annoyanceJudged = null;
+        breakingPoint = habits.breakingPoint(paceRng);
+        Microbot.log(Level.INFO, "Play style: " + config.playStyle());
+        Microbot.log(Level.INFO, "[HB-PACE] %s", pace().describe());
+        Microbot.log(Level.INFO, "[HB-HABITS] %s", habits.describe());
+        cameraFramed = false;
+        Rs2Antiban.antibanSetupTemplates.applyHunterSetup();
+        Rs2Antiban.setActivity(Activity.HUNTING_HERBIBOARS);
+        // Our pace owns the mouse; the client's own random moves, off-screen trips and slips would fight it.
+        savedMoveMouseRandomly = Rs2AntibanSettings.moveMouseRandomly;
+        savedMoveMouseOffScreen = Rs2AntibanSettings.moveMouseOffScreen;
+        savedSimulateMistakes = Rs2AntibanSettings.simulateMistakes;
+        Rs2AntibanSettings.moveMouseRandomly = false;
+        Rs2AntibanSettings.moveMouseOffScreen = false;
+        Rs2AntibanSettings.simulateMistakes = false;
+        String override = antibanOverride(Rs2AntibanSettings.universalAntiban, Rs2AntibanSettings.overwriteScriptSettings);
+        if (override != null) Microbot.log(Level.WARN, "%s is on in the client settings and may override this script's pace", override);
+
+        mainScheduledFuture = scheduledExecutorService.scheduleWithFixedDelay(() -> {
+            if (!passRunning.compareAndSet(false, true)) {
+                Microbot.log(Level.WARN, "A second script pass started while one was running; skipped");
+                return;
+            }
+            try {
+                // An interrupted thread makes every natural-mouse sleep return at once: moves teleport.
+                if (Thread.interrupted()) Microbot.log(Level.WARN, "Script thread was interrupted; cleared so the mouse moves naturally");
+                if (!Microbot.isLoggedIn()) {
+                    // A region load (LOADING) is not a logout: it happens every ~40s out here.
+                    if (Microbot.getClient().getGameState() != GameState.LOADING) wasLoggedOut = true;
+                    // Never during a break: the break handler logs back in.
+                    if (Microbot.getClient().getGameState() == GameState.LOGIN_SCREEN && !BreakHandlerScript.isBreakActive()
+                            && System.currentTimeMillis() >= nextLoginAt) {
+                        nextLoginAt = System.currentTimeMillis() + Rs2Random.betweenInclusive(8000, 15000);
+                        Microbot.log(Level.INFO, "At the login screen; logging back in");
+                        LoginManager.login();
+                    }
+                    return;
+                }
+                // The welcome screen is LOGGED_IN but swallows camera keys and zoom.
+                // Play is clicked here: the client's own handler is slow.
+                if (Rs2Widget.isWidgetVisible(InterfaceID.WelcomeScreen.PLAY)) {
+                    cameraFramed = false;
+                    frameDueAt = 0;
+                    cameUpFromWelcome = true;
+                    idle("the welcome screen");
+                    sleep(Rs2Random.betweenInclusive(600, 1500));
+                    if (Rs2Widget.isWidgetVisible(InterfaceID.WelcomeScreen.PLAY)) {
+                        Rs2Widget.clickWidget(InterfaceID.WelcomeScreen.PLAY);
+                        sleepUntil(() -> !Rs2Widget.isWidgetVisible(InterfaceID.WelcomeScreen.PLAY), 3000);
+                    }
+                    return;
+                }
+                if (wasLoggedOut) {
+                    // Let the trail varbits land and the welcome screen clear, then resume from the game's state.
+                    wasLoggedOut = false;
+                    sleep(Rs2Random.betweenInclusive(1200, 2600));
+                    // The G.E. offer and the walk survive a relog.
+                    if (state != HerbiboarState.INITIALIZING && state != HerbiboarState.CHECK_AUTO_RETALIATE
+                            && state != HerbiboarState.RESTOCK) {
+                        Microbot.log(Level.INFO, "Back in game (was " + state + "); resuming from the game's trail state");
+                        backToInventory();
+                        setState(HerbiboarState.RESET);
+                    }
+                }
+                if (relogPending) {
+                    relogPending = false;
+                    Rs2Player.logout();
+                    return;
+                }
+                if (state != lastPolledState) {
+                    lastPolledState = state;
+                    clearInFlight();
+                    if (breaksLocked(state)) BreakHandlerScript.setLockState(true);
+                    else if (state == HerbiboarState.START) BreakHandlerScript.setLockState(false);
+                    HerbiboarSession session = herbiboarPlugin.getSession();
+                    if (session != null && state == HerbiboarState.BANK) session.bankTrips++;
+                    if (state == HerbiboarState.BANK) {
+                        notedNext = nextTargetOf(herbiboarPlugin.getFinishId(), herbiboarPlugin.getCurrentPath(),
+                                herbiboarPlugin.getEndLocations());
+                        Microbot.log(Level.INFO, notedNext != null ? "Banking mid-trail: next was " + notedNext
+                                : "Banking after a catch");
+                    }
+                    startTarget = null; startChosen = false;
+                    if (session != null && state == HerbiboarState.RESTOCK) session.restocks++;
+                    clearRoute();
+                    tunnelSince = null;
+                    harvestSince = null;
+                    cursorMissTarget = null;
+                    cursorMisses = 0;
+                    coverTries = 0;
+                    walkedCloserFor = null;
+                }
+                // Any other script's shutdown() resets this global, so re-assert it: teleports only for the G.E. trip.
+                Rs2Walker.disableTeleports = state != HerbiboarState.RESTOCK;
+                if (!super.run()) return;
+                if (BreakHandlerScript.isMicroBreakActive()) return;
+                if (BreakHandlerScript.isBreakActive()) return;
+                if (!cameraFramed) {
+                    // Clicks on the login camera miss. Camera moves never cancel the character's action.
+                    long now = System.currentTimeMillis();
+                    if (frameDueAt == 0) {
+                        frameDueAt = now + (cameUpFromWelcome
+                                ? Rs2Random.betweenInclusive(1000, 3000) : Rs2Random.betweenInclusive(600, 1500));
+                        cameUpFromWelcome = false;
+                    }
+                    if (now < frameDueAt) {
+                        idle("settling in");
+                        return;
+                    }
+                    cameraFramed = true;
+                    frameDueAt = 0;
+                    frameCamera();
+                }
+                holdZoom();
+                holdPitch();
+
+                if (lastLocation != null && !lastLocation.equals(Rs2Player.getWorldLocation())) {
+                    lastMove = Instant.now();
+                    lastLocation = Rs2Player.getWorldLocation();
+                    stuckMinutes = 0;
+                } else if (config.resetIfStuck() && lastMove != null
+                        && Instant.now().isAfter(lastMove.plusSeconds(60))
+                        && state != HerbiboarState.RESET && state != HerbiboarState.INITIALIZING
+                        && state != HerbiboarState.CHECK_AUTO_RETALIATE && state != HerbiboarState.RESTOCK
+                        && !(state == HerbiboarState.BANK && Rs2Bank.isOpen())) {
+                    stuckMinutes++;
+                    if (giveUpWhenStuck(stuckMinutes)) {
+                        Microbot.log(Level.WARN, "Stuck in " + state + " at " + Rs2Player.getWorldLocation()
+                                + " for " + stuckMinutes + " minutes; logging out");
+                        herbiboarPlugin.setStopReason("stuck in " + state + " for " + stuckMinutes + " minutes");
+                        Rs2Player.logout();
+                        Microbot.stopPlugin(herbiboarPlugin);
+                        return;
+                    }
+                    Microbot.log(Level.INFO,"Player has not moved for over 1 minute, resetting script state");
+                    lastMove = Instant.now();
+                    lastLocation = null;
+                    setState(HerbiboarState.RESET);
+                } else if (lastMove == null || lastLocation == null) {
+                    lastMove = Instant.now();
+                    lastLocation = Rs2Player.getWorldLocation();
+                }
+
+                // Not with the bank open: that drinks from the bank's inventory view.
+                if (inDeadTime() && !Rs2Bank.isOpen() && state != HerbiboarState.RESTOCK) upkeep();
+                // An inventory click cancels a queued object click but not a plain walk.
+                int energy = Rs2Player.getRunEnergy();
+                if (energy <= LOW_ENERGY_DRINK && inFlight == null && !Rs2Player.isAnimating() && !Rs2Bank.isOpen()
+                        && state != HerbiboarState.RESTOCK) {
+                    manageRunEnergy(config);
+                }
+                boolean runOn = Rs2Player.isRunEnabled();
+                if (wasRunOn && !runOn) Microbot.log(Level.INFO, "Run went off at %d%% energy", energy);
+                wasRunOn = runOn;
+                // The game turns run off at 0 energy, and Rs2Player.toggleRunEnergy refuses below the client's threshold.
+                // Clicking the orb never cancels a walk or a queued click.
+                if (!runOn && energy >= runBackOnAt) {
+                    // Microbot.log is a format string: use %% for a literal percent.
+                    Microbot.log(Level.INFO, "Run is off at %d%% energy; turning it back on", Rs2Player.getRunEnergy());
+                    Rs2Widget.clickWidget(InterfaceID.Orbs.RUNBUTTON);
+                    sleepUntil(Rs2Player::isRunEnabled, 1200);
+                    runBackOnAt = Rs2Random.betweenInclusive(3, 10);
+                }
+
+                // Not in TUNNEL/HARVEST: leaving an attacked boar loses the catch.
+                if (bankAllowedIn(state) && needsToBank(config)) {
+                    Microbot.log(Level.INFO,"Need to bank, switching to BANK state");
+                    setState(HerbiboarState.BANK);
+                }
+
+                if (needsTravel(state, Rs2Player.getWorldLocation())) {
+                    Microbot.log(Level.INFO, "Off Fossil Island at " + Rs2Player.getWorldLocation() + "; travelling there");
+                    pendantTried = false;
+                    travelFails = 0;
+                    setState(HerbiboarState.TRAVEL);
+                }
+
+                switch (state) {
+                    case RESET:
+                        // Inspecting a start rock does not abandon a trail.
+                        Microbot.status = "Resuming...";
+                        attackedTunnel = false;
+                        boarWait = null;
+                        huntTunnel = null;
+                        preHoverAim = null;
+                        lastMove = Instant.now();
+                        lastLocation = null;
+                        HerbiboarState resume = resumeState(herbiboarPlugin.getFinishId(),
+                                herbiboarPlugin.getCurrentGroup() != null);
+                        Microbot.log(Level.INFO, "Resuming in " + resume + " (finishId="
+                                + herbiboarPlugin.getFinishId() + ", path=" + herbiboarPlugin.getCurrentPath().size() + ")");
+                        // Set before the hand-off, or a mid-trail break can slip in before the next pass relocks.
+                        BreakHandlerScript.setLockState(breaksLocked(resume));
+                        setState(resume);
+                        break;
+                    case INITIALIZING:
+                        Microbot.status = "Starting...";
+                        Microbot.log(Level.INFO,"Initializing...");
+                        setState(HerbiboarState.CHECK_AUTO_RETALIATE);
+                        break;
+                    case CHECK_AUTO_RETALIATE:
+                        Microbot.status = "Checking auto retaliate...";
+                        Microbot.log(Level.INFO,"Checking auto retaliate...");
+                        // Retaliating on a crab drags the player off the trail.
+                        if (!Rs2Combat.setAutoRetaliate(false)) {
+                            idle("auto retaliate is still on; trying again");
+                            break;
+                        }
+                        // RESET, not START: after a crash or restart mid-trail, pick the trail or tunnel back up.
+                        setState(HerbiboarState.RESET);
+                        break;
+                    case START:
+                        Microbot.status = "Finding start location";
+                        if (herbiboarPlugin.getCurrentGroup() == null) {
+                            if (!startChosen) {
+                                startChosen = true;
+                                WorldPoint me = Rs2Player.getWorldLocation();
+                                List<WorldPoint> rocks = HerbiHunterPlugin.START_LOCATIONS;
+                                int[] costs = new int[rocks.size()];
+                                for (int i = 0; i < costs.length; i++) costs[i] = startRouteCost(me, rocks.get(i));
+                                startTarget = nearestByRoute(rocks, c -> costs[rocks.indexOf(c)], skipStart);
+                                StringBuilder others = new StringBuilder();
+                                for (int i = 0; i < costs.length; i++) {
+                                    if (!rocks.get(i).equals(startTarget)) {
+                                        others.append(others.length() == 0 ? "" : ", ").append(START_NAMES.get(i)).append(' ').append(costs[i]);
+                                    }
+                                }
+                                if (startTarget != null) {
+                                    Microbot.log(Level.INFO, "Start: " + START_NAMES.get(rocks.indexOf(startTarget)) + " " + startTarget.getX() + "," + startTarget.getY()
+                                            + " (route " + costs[rocks.indexOf(startTarget)] + " tiles; " + others + ")");
+                                } else {
+                                    Microbot.log(Level.INFO, "Start: no route to any start rock; nearest loaded by distance");
+                                }
+                            }
+                            TileObject start;
+                            if (startTarget != null) {
+                                start = herbiboarPlugin.getStarts().get(startTarget);
+                            } else {
+                                start = herbiboarPlugin.getStarts().values().stream()
+                                    .filter(s -> !s.getWorldLocation().equals(skipStart))
+                                    .min(Comparator.comparing(s -> Rs2Player.getWorldLocation().distanceTo(s.getWorldLocation())))
+                                    .orElse(null);
+                                if (start == null) {
+                                    showRoute(RETURN_LOCATION);
+                                    travelTo(RETURN_LOCATION, 4, () -> Rs2Player.getWorldLocation().distanceTo(RETURN_LOCATION) < 5);
+                                    break;
+                                }
+                            }
+                            if (start != null && !warningToggleTried
+                                    && Microbot.getVarbitValue(VarbitID.FOSSIL_HERBIBOAR_ALREADY_CAUGHT_IGNORE_WARNING) != 1
+                                    && start.getWorldLocation().distanceTo(Rs2Player.getWorldLocation()) <= 10) {
+                                // Once per session: otherwise a new trail can stop on a confirmation dialog.
+                                warningToggleTried = true;
+                                model(start).click("Toggle warning");
+                                sleepUntil(() -> Microbot.getVarbitValue(VarbitID.FOSSIL_HERBIBOAR_ALREADY_CAUGHT_IGNORE_WARNING) == 1, 3000);
+                            }
+                            {
+                                // A start rock plays no animation; the trail appearing is the proof.
+                                WorldPoint rockLoc = startTarget != null ? startTarget : start.getWorldLocation();
+                                if (approachAndInteract(start, rockLoc, TRAIL_ACTION,
+                                        herbiboarPlugin::getCurrentGroup, config)) {
+                                    BreakHandlerScript.setLockState(true);
+                                    sleepUntil(() -> herbiboarPlugin.getCurrentGroup() != null, 3000);
+                                }
+                            }
+                        } else {
+                            skipStart = null;
+                            startTarget = null; startChosen = false;
+                            setState(HerbiboarState.TRAIL);
+                        }
+                        break;
+                    case TRAIL:
+                        Microbot.status = "Following trail";
+                        // First: confusion empties the trail, which every later branch needs.
+                        if (checkForConfusionMessage(herbiboarPlugin)) return;
+                        if (herbiboarPlugin.getFinishId() > 0) {
+                            setState(HerbiboarState.TUNNEL);
+                            break; 
+                        }
+                        List<HerbiboarSearchSpot> path = herbiboarPlugin.getCurrentPath();
+                        if (trailIsLost(path.isEmpty(), herbiboarPlugin.getCurrentGroup() == null)) {
+                            Microbot.log(Level.INFO, "Trail data is gone, searching for a new start");
+                            setState(HerbiboarState.START);
+                            break;
+                        }
+                        if (!path.isEmpty()) {
+                            int searched = path.size();
+                            WorldPoint loc = path.get(searched - 1).getLocation();
+                            TileObject object = herbiboarPlugin.getTrailObjects().get(loc);
+                            approachAndInteract(object, loc, TRAIL_ACTION,
+                                    () -> trailProgress(herbiboarPlugin), config);
+                        }
+                        break;
+                    case TUNNEL:
+                        Microbot.status = "Attacking tunnel";
+                        int finishId = herbiboarPlugin.getFinishId();
+                        List<WorldPoint> endLocations = herbiboarPlugin.getEndLocations();
+                        if (validFinishId(finishId, endLocations.size())) {
+                            huntTunnel = endLocations.get(finishId - 1);
+                        }
+                        WorldPoint ourTunnel = huntTunnel;
+                        if (herbiboarAt(ourTunnel) != null) {
+                            tunnelSince = null;
+                            harvestSince = null;
+                            setState(HerbiboarState.HARVEST);
+                            harvest(config);
+                            break;
+                        }
+                        // Attacked and the trail has ended: the boar is on its way out, so re-clicking only interrupts it.
+                        if (attackedTunnel && boarWait != BoarWait.NOTHING) {
+                            if (boarWait == BoarWait.MOUSE_AWAY) {
+                                if (!glanced) {
+                                    glanceAway();
+                                    settled();
+                                }
+                            }
+                            else preHoverBoarSpot(ourTunnel);
+                        }
+                        boolean boarComing = attackedTunnel && finishId == 0;
+                        if (boarComing) {
+                            if (tunnelSince == null) tunnelSince = Instant.now();
+                            if (Instant.now().isAfter(tunnelSince.plusMillis(HARVEST_GIVE_UP_MS))) {
+                                Microbot.log(Level.INFO, "No herbiboar came out of " + ourTunnel
+                                        + ", starting the next trail");
+                                tunnelSince = null;
+                                attackedTunnel = false;
+                                boarWait = null;
+                                huntTunnel = null;
+                                preHoverAim = null;
+                                setState(HerbiboarState.START);
+                                break;
+                            }
+                            idle("waiting for the herbiboar at " + ourTunnel);
+                            TileObject emerging = herbiboarPlugin.getTunnels().get(ourTunnel);
+                            if (boarWait != BoarWait.MOUSE_AWAY && boarWait != BoarWait.NOTHING
+                                    && !preHoverBoarSpot(ourTunnel) && emerging != null && onScreen(emerging)) {
+                                hoverOnce(() -> hullOf(emerging), () -> Rs2Camera.getObjectAngle(emerging));
+                            }
+                            if (sleepUntil(() -> herbiboarAt(ourTunnel) != null, 1500)) {
+                                tunnelSince = null;
+                                setState(HerbiboarState.HARVEST);
+                                harvest(config);
+                                break;
+                            }
+                        }
+                        if (!boarComing) {
+                            if (ourTunnel != null) {
+                                final WorldPoint finishLoc = ourTunnel;
+                                TileObject tunnel = herbiboarPlugin.getTunnels().get(finishLoc);
+                                String action = tunnel != null && hasAction(model(tunnel), "Attack")
+                                        ? "Attack" : "Search";
+                                if (tunnelSince == null) tunnelSince = Instant.now();
+                                if (Instant.now().isAfter(tunnelSince.plusMillis(TUNNEL_GIVE_UP_MS))) {
+                                    Microbot.log(Level.INFO, "Tunnel at " + finishLoc + " yielded nothing in "
+                                            + (TUNNEL_GIVE_UP_MS / 1000) + "s (object "
+                                            + (tunnel == null ? "not loaded" : "loaded") + "), attacking it again");
+                                    tunnelSince = Instant.now();
+                                    attackedTunnel = false;
+                                    boarWait = null;
+                                    clearInFlight();
+                                }
+                                // Latch: an in-flight poll returns false and must not un-attack.
+                                if (approachAndInteract(tunnel, finishLoc, action,
+                                        () -> herbiboarPlugin.getFinishId() == 0 || herbiboarAt(finishLoc) != null, config)) {
+                                    attackedTunnel = true;
+                                    boarWait = boarWaitChoice(pace().isRelaxed(), paceRng.nextDouble(), pace().preHoverChance());
+                                    glanced = false;
+                                    tunnelSince = Instant.now();
+                                }
+                            }
+                        }
+                        break;
+                    case HARVEST:
+                        harvest(config);
+                        break;
+                    case BANK:
+                        Microbot.status = "Banking items";
+
+                        if (!Rs2Bank.isOpen() && shouldRestock(config.restock(), hasEnergyItems(config), config.runEnergyOption())
+                                && bankedDoses(config.runEnergyOption()) == 0) {
+                            Microbot.log(Level.INFO, "Out of " + config.runEnergyOption() + " and the bank has none either; "
+                                    + "straight to the G.E.");
+                            restockStep = RestockStep.COINS;
+                            setState(HerbiboarState.RESTOCK);
+                            break;
+                        }
+                        if (!Rs2Bank.isOpen()) {
+                            // Via the walker, which plans the hole itself: our own hole/minimap legs freeze here.
+                            if (onFossilIsland(Rs2Player.getWorldLocation())) {
+                                Microbot.log(Level.INFO, "Walking to the camp bank");
+                                showRoute(CAMP_BANK);
+                                Rs2Bank.walkToBankAndUseBank(BankLocation.FOSSIL_ISLAND);
+                            } else {
+                                Microbot.log(Level.INFO, "Off Fossil Island; using the nearest bank");
+                                Rs2Bank.walkToBankAndUseBank();
+                            }
+                            dropWalkerRoute();
+                            sleepUntil(Rs2Bank::isOpen, 3000);
+                        } else {
+                            if (config.useHerbSack() && !Rs2Inventory.contains(HERB_SACKS)) {
+                                for (int sack : HERB_SACKS) {
+                                    if (Rs2Bank.hasItem(sack)) {
+                                        Rs2Bank.withdrawOne(sack);
+                                        break;
+                                    }
+                                }
+                                Rs2Inventory.waitForInventoryChanges(1000);
+                            }
+                            if (config.useMagicSecateurs() && !Rs2Equipment.isWearing(ItemID.FAIRY_ENCHANTED_SECATEURS)
+                                    && !Rs2Inventory.contains(ItemID.FAIRY_ENCHANTED_SECATEURS)) {
+                                if (Rs2Bank.hasItem(ItemID.FAIRY_ENCHANTED_SECATEURS)) {
+                                    Rs2Bank.withdrawOne(ItemID.FAIRY_ENCHANTED_SECATEURS);
+                                    Rs2Inventory.waitForInventoryChanges(1000);
+                                    Rs2Bank.wearItem(ItemID.FAIRY_ENCHANTED_SECATEURS);
+                                    Rs2Inventory.waitForInventoryChanges(1000);
+                                }
+                            }
+                            // Lock the sack and secateurs so deposit-all keeps them.
+                            if (Microbot.getVarbitValue(VarbitID.BANK_SIDE_SLOT_SHOWOP) != 1 ||
+                            Microbot.getVarbitValue(VarbitID.BANK_SIDE_SLOT_IGNOREINVLOCKS) != 0) {
+                                Rs2Widget.clickWidget(InterfaceID.Bankmain.MENU_BUTTON);
+                                sleepUntil(()->Rs2Widget.isWidgetVisible(InterfaceID.Bankmain.MENU_CONTAINER), 2000);
+                                Rs2Widget.clickWidget(InterfaceID.Bankmain.LOCKS);
+                                sleepUntil(()->Rs2Widget.isWidgetVisible(InterfaceID.BankSideLocks.DONE), 2000);
+                                if (Microbot.getVarbitValue(VarbitID.BANK_SIDE_SLOT_IGNOREINVLOCKS) != 0) {
+                                    Rs2Widget.clickWidget(InterfaceID.BankSideLocks.IGNORELOCKS);
+                                    sleepUntil(() -> Microbot.getVarbitValue(VarbitID.BANK_SIDE_SLOT_IGNOREINVLOCKS) == 0, 2000);
+                                }
+                                if (Microbot.getVarbitValue(VarbitID.BANK_SIDE_SLOT_SHOWOP) != 1){
+                                    Rs2Widget.clickWidget(InterfaceID.BankSideLocks.EXTRAOPTIONS);
+                                    sleepUntil(()->Microbot.getVarbitValue(VarbitID.BANK_SIDE_SLOT_SHOWOP) == 1, 2000);
+                                }
+                                Rs2Widget.clickWidget(InterfaceID.BankSideLocks.DONE);
+                                sleepUntil(()->!Rs2Widget.isWidgetVisible(InterfaceID.BankSideLocks.DONE), 2000);
+                                Rs2Widget.clickWidget(InterfaceID.Bankmain.MENU_BUTTON);
+                            }
+
+                            ArrayList<Integer> slotsToLock = new ArrayList<>();
+                            if (config.useHerbSack() && Rs2Inventory.contains(HERB_SACKS)) {
+                                slotsToLock.add(Rs2Inventory.get(HERB_SACKS).getSlot());
+                            }
+                            if (config.useMagicSecateurs() && !Rs2Equipment.isWearing(ItemID.FAIRY_ENCHANTED_SECATEURS)
+                                    && Rs2Inventory.contains(ItemID.FAIRY_ENCHANTED_SECATEURS) ) {
+                                slotsToLock.add(Rs2Inventory.get(ItemID.FAIRY_ENCHANTED_SECATEURS).getSlot());
+                            }
+
+                            // Only unlock the slots we lock: toggleAllLocks undoes the player's own locks too.
+                            List<Integer> lockedBefore = Rs2Bank.findLockedSlots();
+                            slotsToLock.removeAll(lockedBefore);
+                            if (!slotsToLock.isEmpty()) {
+                                sleepUntil(() -> Rs2Bank.lockAllBySlot(slotsToLock.stream().mapToInt(Integer::intValue).toArray()), 2000);
+                            }
+
+                            boolean sackFirst = config.useHerbSack() && Rs2Inventory.contains(HERB_SACKS) && habits.emptiesSackFirst(paceRng);
+                            if (sackFirst) {
+                                Rs2Inventory.interact(HERB_SACKS, "Empty");
+                                Rs2Inventory.waitForInventoryChanges(1000);
+                            }
+                            Rs2Widget.clickWidget(InterfaceID.Bankmain.DEPOSITINV);
+                            if (!sackFirst && config.useHerbSack() && Rs2Inventory.contains(HERB_SACKS)) {
+                                // Empty with the bank open banks the herbs; Rs2Bank.emptyHerbSack misses the silk sack.
+                                Rs2Inventory.interact(HERB_SACKS, "Empty");
+                                Rs2Inventory.waitForInventoryChanges(1000);
+                                Rs2Widget.clickWidget(InterfaceID.Bankmain.DEPOSITINV);
+                            }
+                            Rs2Inventory.waitForInventoryChanges(1000);
+                            sleep(reactionMs());
+                            for (int slot : slotsToLock) {
+                                Rs2ItemModel locked = Rs2Inventory.getItemInSlot(slot);
+                                // toggleItemLock(name) acts on the FIRST item of that name: only when that is this slot.
+                                Rs2ItemModel first = locked == null ? null : Rs2Inventory.get(locked.getName(), true);
+                                if (first != null && first.getSlot() == slot && Rs2Bank.isLockedSlot(slot)) {
+                                    Rs2Bank.toggleItemLock(locked.getName(), true);
+                                }
+                            }
+
+                            HerbiboarConfig.RunEnergyOption energyOption = config.runEnergyOption();
+                            switch (energyOption) {
+                                case STAMINA_POTION:
+                                case SUPER_ENERGY_POTION:
+                                case ENERGY_POTION:
+                                    ensureEnergyDoses(energyOption, 24);
+                                    break;
+                                case STRANGE_FRUIT:
+                                    if (Rs2Inventory.count(ItemID.MACRO_TRIFFIDFRUIT) < 6) {
+                                        Rs2Bank.withdrawX(ItemID.MACRO_TRIFFIDFRUIT, 6 - Rs2Inventory.count(ItemID.MACRO_TRIFFIDFRUIT));
+                                        sleep(reactionMs());
+                                    }
+                                    break;
+                                default:
+                                    break;
+                            }
+                            if (shouldRestock(config.restock(), hasEnergyItems(config), energyOption)) {
+                                Microbot.log(Level.INFO, "Bank has no " + energyOption + " left; restocking at the G.E.");
+                                restockStep = RestockStep.COINS;
+                                setState(HerbiboarState.RESTOCK);
+                                break;
+                            }
+                            if (!hasRequiredInventorySetup(config)) {
+                                Microbot.log(Level.INFO, "Bank cannot supply the configured setup ("
+                                        + energyOption + (config.useHerbSack() ? ", herb sack" : "")
+                                        + "); logging out");
+                                herbiboarPlugin.setStopReason("bank ran out of supplies");
+                                Rs2Bank.closeBank();
+                                Rs2Player.logout();
+                                Microbot.stopPlugin(herbiboarPlugin);
+                                return;
+                            }
+                            if (!needsToBank(config)) {
+                                // deposit-all took any pendant carried: the trip still wants one
+                                if (!onFossilIsland(Rs2Player.getWorldLocation()) && !Rs2Inventory.contains(DIGSITE_PENDANTS)) {
+                                    for (int pendant : DIGSITE_PENDANTS) {
+                                        if (Rs2Bank.hasItem(pendant)) {
+                                            Rs2Bank.withdrawOne(pendant);
+                                            Rs2Inventory.waitForInventoryChanges(1000);
+                                            break;
+                                        }
+                                    }
+                                }
+                                Rs2Bank.closeBank();
+                                sleepUntil(() -> !Rs2Bank.isOpen(), 3000);
+                                // A live trail stays locked through the idle that follows; only a finished one may break.
+                                BreakHandlerScript.setLockState(keepBreaksLockedAtBankExit(
+                                        resumeState(herbiboarPlugin.getFinishId(), herbiboarPlugin.getCurrentGroup() != null)));
+                                setState(HerbiboarState.RETURN_FROM_ISLAND);
+                                long afk = pace().afkAfterBankMs(paceRng);
+                                if (afk > 0) {
+                                    idle("taking a moment");
+                                    sleep((int) afk);
+                                    settled();
+                                }
+                            }
+                        }
+                        break;
+                    case RESTOCK:
+                        Microbot.status = "Restocking at the G.E.";
+                        restock(config, herbiboarPlugin);
+                        break;
+                    case TRAVEL:
+                        Microbot.status = "Walking to Fossil Island";
+                        travel(herbiboarPlugin);
+                        break;
+                    case RETURN_FROM_ISLAND:
+                        Microbot.status = "Returning to island";
+                        HerbiboarState next = resumeState(herbiboarPlugin.getFinishId(),
+                                herbiboarPlugin.getCurrentGroup() != null);
+                        WorldPoint nowNext = nextTargetOf(herbiboarPlugin.getFinishId(), herbiboarPlugin.getCurrentPath(),
+                                herbiboarPlugin.getEndLocations());
+                        if (next == HerbiboarState.START) {
+                            Microbot.log(Level.INFO, notedNext != null
+                                    ? "Back from the bank: trail gone while banking (noted " + notedNext + ")"
+                                    : "Back from the bank: START");
+                        } else {
+                            Microbot.log(Level.INFO, "Back from the bank: " + next + " at " + nowNext
+                                    + (notedNext != null ? " (noted " + notedNext + " at the chest)" : ""));
+                        }
+                        notedNext = null;
+                        setState(next);
+                        break;
+                }
+            } catch (Exception ex) {
+                // Stopping the plugin interrupts this thread mid client-thread call; not an error.
+                if (!isRunning() || ex.getCause() instanceof InterruptedException) return;
+                reportError(ex);
+            } finally {
+                passRunning.set(false);
+            }
+        }, 0, 80, TimeUnit.MILLISECONDS); // fast poll; human pacing lives in the reaction pause and mouse moves
+        return true;
+    }
+
+    enum RestockStep { COINS, TO_GE, BUY, WAIT, TO_CAMP }
+
+    private RestockStep restockStep = RestockStep.COINS;
+    private int restockPrice;
+    private String restockItem;
+    private long restockOfferAt;
+    private int restockWalkFails;
+    private static final int RESTOCK_OFFER_TIMEOUT_MS = 180_000;
+
+    static boolean canAfford(long coins, long cost) {
+        return cost > 0 && cost <= Integer.MAX_VALUE && coins >= cost;
+    }
+
+    private static int bankedDoses(HerbiboarConfig.RunEnergyOption option) {
+        if (!Rs2Bank.hasBankMirrorSnapshot()) return -1;
+        int[] ids = doseIds(option);
+        if (ids.length == 0) return -1;
+        int doses = 0;
+        for (int i = 0; i < ids.length; i++) doses += (i + 1) * Rs2Bank.count(ids[i]);
+        return doses;
+    }
+
+    /** Ids by dose, 1 to 4; empty for an item without doses. */
+    private static int[] doseIds(HerbiboarConfig.RunEnergyOption option) {
+        switch (option) {
+            case STAMINA_POTION: return new int[]{ItemID._1DOSESTAMINA, ItemID._2DOSESTAMINA, ItemID._3DOSESTAMINA, ItemID._4DOSESTAMINA};
+            case SUPER_ENERGY_POTION: return new int[]{ItemID._1DOSE2ENERGY, ItemID._2DOSE2ENERGY, ItemID._3DOSE2ENERGY, ItemID._4DOSE2ENERGY};
+            case ENERGY_POTION: return new int[]{ItemID._1DOSE1ENERGY, ItemID._2DOSE1ENERGY, ItemID._3DOSE1ENERGY, ItemID._4DOSE1ENERGY};
+            default: return new int[0];
+        }
+    }
+
+    static int restockPrice(long guidePrice) {
+        return guidePrice <= 0 ? -1 : (int) Math.min(Integer.MAX_VALUE, (long) Math.ceil(guidePrice * 1.10));
+    }
+
+    private void restock(HerbiboarConfig config, HerbiHunterPlugin herbiboarPlugin) {
+        int potion = fullDoseItemId(config.runEnergyOption());
+        // a value saved before the cap could still be above the buy limit
+        int amount = Math.min(config.restockAmount(), 2000);
+        WorldPoint ge = BankLocation.GRAND_EXCHANGE.getWorldPoint();
+        WorldPoint me = Rs2Player.getWorldLocation();
+        switch (restockStep) {
+            case COINS: {
+                // The client keeps the bank's last contents per account; without that copy, look once at the camp bank.
+                if (!Rs2Bank.hasBankMirrorSnapshot() && !Rs2Bank.isOpen()) {
+                    Rs2Bank.walkToBankAndUseBank(BankLocation.FOSSIL_ISLAND);
+                    return;
+                }
+                restockItem = Microbot.getClientThread().runOnClientThreadOptional(
+                        () -> Microbot.getClient().getItemDefinition(potion).getName()).orElse(null);
+                // ItemManager reads the item definition: client thread only.
+                restockPrice = restockPrice(Microbot.getClientThread().runOnClientThreadOptional(
+                        () -> Microbot.getItemManager().getItemPriceWithSource(potion, false)).orElse(0L));
+                if (restockItem == null || restockPrice <= 0) {
+                    stopRestock("no G.E. price for " + restockItem + " (" + potion + ")", herbiboarPlugin);
+                    return;
+                }
+                long cost = (long) restockPrice * amount;
+                long coins = Rs2Inventory.itemQuantity(ItemID.COINS) + (long) Rs2Bank.count(ItemID.COINS);
+                if (!canAfford(coins, cost)) {
+                    stopRestock("need " + cost + " coins for " + amount + " " + restockItem + " at " + restockPrice
+                            + " each, have " + coins + " (inventory + bank)", herbiboarPlugin);
+                    return;
+                }
+                // No withdrawal: a G.E. buy offer takes the coins from the bank itself (inventory coins first).
+                Microbot.log(Level.INFO, "Restock: " + amount + " " + restockItem + " at " + restockPrice + " ("
+                        + cost + " coins of " + coins + "); walking to the G.E.");
+                if (Rs2Bank.isOpen()) {
+                    Rs2Bank.closeBank();
+                    sleepUntil(() -> !Rs2Bank.isOpen(), 2000);
+                }
+                restockWalkFails = 0;
+                restockStep = RestockStep.TO_GE;
+                return;
+            }
+            case TO_GE:
+                if (me != null && me.distanceTo(ge) <= 8) {
+                    restockWalkFails = 0;
+                    restockStep = RestockStep.BUY;
+                    return;
+                }
+                if (!Rs2Walker.walkTo(ge, 5) && ++restockWalkFails >= 5) {
+                    stopRestock("could not reach the G.E. (5 walks failed, at " + me + ")", herbiboarPlugin);
+                }
+                return;
+            case BUY:
+                if (Rs2GrandExchange.isOpen() || Rs2GrandExchange.openExchange()) {
+                    if (Rs2GrandExchange.getAvailableSlot() == null) {
+                        Rs2GrandExchange.collectAllToBank();
+                        sleepUntil(Rs2GrandExchange::isAllSlotsEmpty, 3000);
+                    }
+                    if (Rs2GrandExchange.buyItem(restockItem, restockPrice, amount)) {
+                        restockWalkFails = 0;
+                        restockOfferAt = System.currentTimeMillis();
+                        restockStep = RestockStep.WAIT;
+                        return;
+                    }
+                }
+                if (++restockWalkFails >= 5) stopRestock("could not place the G.E. offer (5 tries failed)", herbiboarPlugin);
+                return;
+            case WAIT:
+                if (Rs2GrandExchange.hasFinishedBuyingOffers()) {
+                    if (!Rs2GrandExchange.isOpen()) Rs2GrandExchange.openExchange();
+                    Rs2GrandExchange.collectAllToBank();
+                    sleepUntil(Rs2GrandExchange::isAllSlotsEmpty, 5000);
+                    Rs2GrandExchange.closeExchange();
+                    Microbot.log(Level.INFO, "Restock: bought " + amount + " " + restockItem + "; back to Fossil Island");
+                    restockWalkFails = 0;
+                    restockStep = RestockStep.TO_CAMP;
+                } else if (System.currentTimeMillis() - restockOfferAt > RESTOCK_OFFER_TIMEOUT_MS) {
+                    Rs2GrandExchange.abortOffer(restockItem, true);
+                    stopRestock("the offer for " + amount + " " + restockItem + " at " + restockPrice
+                            + " did not fill in " + (RESTOCK_OFFER_TIMEOUT_MS / 60000) + " minutes", herbiboarPlugin);
+                }
+                return;
+            case TO_CAMP:
+                if (me != null && me.distanceTo(CAMP_BANK) <= 5) {
+                    setState(HerbiboarState.BANK);
+                    return;
+                }
+                if (!Rs2Walker.walkTo(CAMP_BANK, 3) && ++restockWalkFails >= 5) {
+                    stopRestock("could not get back to the Fossil Island camp bank (at " + me + ")", herbiboarPlugin);
+                }
+                return;
+        }
+    }
+
+    private Boolean savedMushtrees;
+    private boolean pendantTried;
+    private int travelFails;
+
+    private void travel(HerbiHunterPlugin herbiboarPlugin) {
+        WorldPoint me = Rs2Player.getWorldLocation();
+        if (onFossilIsland(me)) {
+            Microbot.log(Level.INFO, "On Fossil Island at " + me);
+            setState(HerbiboarState.START);
+            return;
+        }
+        if (!pendantTried && Rs2Inventory.contains(DIGSITE_PENDANTS) && pendantHelps(me)) {
+            pendantTried = true;
+            rubPendant(me);
+            return;
+        }
+        if (!Rs2Walker.walkTo(CAMP_BANK, 3) && ++travelFails >= MAX_TRAVEL_FAILS) {
+            Microbot.log(Level.WARN, "Could not reach Fossil Island from " + me + "; logging out");
+            herbiboarPlugin.setStopReason("could not reach Fossil Island");
+            Rs2Player.logout();
+            Microbot.stopPlugin(herbiboarPlugin);
+        }
+    }
+
+    /** The Fossil Island option needs the House on the Hill machine. */
+    private void rubPendant(WorldPoint from) {
+        sleep(reactionMs());
+        if (!Rs2Inventory.interact(DIGSITE_PENDANTS, "Rub") || !sleepUntil(Rs2Dialogue::hasSelectAnOption, 2400)) return;
+        String where = Rs2Dialogue.hasDialogueOption("Fossil Island") ? "Fossil Island" : "Digsite";
+        sleep(reactionMs());
+        if (Rs2Dialogue.clickOption(where)) {
+            Microbot.log(Level.INFO, "Digsite pendant: " + where);
+            sleepUntil(() -> {
+                WorldPoint now = Rs2Player.getWorldLocation();
+                return now != null && now.distanceTo(from) > PENDANT_MIN_TILES;
+            }, 6000);
+        }
+    }
+
+    private void stopRestock(String why, HerbiHunterPlugin herbiboarPlugin) {
+        Microbot.log(Level.WARN, "Restock failed: " + why + "; logging out");
+        herbiboarPlugin.setStopReason("restock failed: " + why);
+        if (Rs2Bank.isOpen()) Rs2Bank.closeBank();
+        if (Rs2GrandExchange.isOpen()) Rs2GrandExchange.closeExchange();
+        Rs2Player.logout();
+        Microbot.stopPlugin(herbiboarPlugin);
+    }
+
+    private String lastErrorKey;
+    private long lastErrorAt;
+    private int repeatedErrors;
+
+    private void reportError(Exception ex) {
+        StackTraceElement at = ex.getStackTrace().length > 0 ? ex.getStackTrace()[0] : null;
+        String key = ex.getClass().getName() + ": " + ex.getMessage() + " @ " + at;
+        long now = System.currentTimeMillis();
+        if (!key.equals(lastErrorKey)) {
+            lastErrorKey = key;
+            lastErrorAt = now;
+            repeatedErrors = 0;
+            log.error("Herbiboar script error", ex);
+            return;
+        }
+        repeatedErrors++;
+        if (now - lastErrorAt >= 60_000) {
+            log.error("Herbiboar script error repeated {} more times in the last minute: {}", repeatedErrors, key);
+            lastErrorAt = now;
+            repeatedErrors = 0;
+        }
+    }
+
+    private long boarSeenAt;
+    private long harvestableAt;
+
+    private void harvest(HerbiboarConfig config) {
+        Microbot.status = "Harvesting herbiboar";
+        Rs2NpcModel out = herbiboarAt(huntTunnel);
+        if (out == null) {
+            if (harvestSince == null) harvestSince = Instant.now();
+            if (Instant.now().isAfter(harvestSince.plusMillis(HARVEST_GIVE_UP_MS))) {
+                Microbot.log(Level.INFO, "No herbiboar at " + huntTunnel + " for "
+                        + (HARVEST_GIVE_UP_MS / 1000) + "s, starting the next trail");
+                harvestSince = null;
+                attackedTunnel = false;
+                boarWait = null;
+                huntTunnel = null;
+                preHoverAim = null;
+                tunnelSince = null;
+                boarSeenAt = 0;
+                harvestableAt = 0;
+                setState(HerbiboarState.START);
+            } else {
+                idle("no herbiboar within " + HERBIBOAR_TUNNEL_RADIUS + " of tunnel " + huntTunnel);
+            }
+            return;
+        }
+        harvestSince = null;
+        if (boarSeenAt == 0) boarSeenAt = System.currentTimeMillis();
+        if (!clickWhenVisible(Rs2Camera.getCharacterAngle(out), () -> hullOf(out), huntTunnel)) return;
+        if (!canHarvest(out)) {
+            // The emerging boar slides ~1.2s, then the game swaps in a new NPC on that spot which offers Harvest.
+            boolean parked = preHoverAim != null && Microbot.getMouse().getMousePosition().distance(preHoverAim) <= PRE_HOVER_NEAR_PX;
+            if (!parked) hoverOnce(() -> hullOf(out), () -> Rs2Camera.getCharacterAngle(out));
+            WorldPoint tunnel = huntTunnel;
+            sleepUntil(() -> harvestableBoarAt(tunnel) != null, HARVEST_READY_TIMEOUT_MS);
+        }
+        Rs2NpcModel herb = canHarvest(out) ? out : harvestableBoarAt(huntTunnel);
+        if (herb != null) {
+            if (huntTunnel != null) boarTiles.putIfAbsent(huntTunnel, herb.getWorldLocation());
+            if (preHoverAim != null) {
+                Shape h = hullOf(herb);
+                if (h != null) {
+                    Rectangle b = h.getBounds();
+                    Microbot.log(Level.INFO, "Boar spot: aimed %d,%d; boar outline %d,%d %dx%d (aim %s it)", preHoverAim.x,
+                            preHoverAim.y, b.x, b.y, b.width, b.height, h.contains(preHoverAim) ? "inside" : "outside");
+                }
+                preHoverAim = null;
+            }
+            if (harvestableAt == 0) {
+                harvestableAt = System.currentTimeMillis();
+                // See Harvest first: a parked cursor would click a fixed ~185 ms after it shows.
+                long seen = reactionMs() - (System.currentTimeMillis() - harvestableAt);
+                if (seen > 0) sleep((int) seen);
+            }
+            if (!hoverOnce(() -> hullOf(herb), () -> Rs2Camera.getCharacterAngle(herb))) {
+                idle("aiming at the herbiboar");
+                return;
+            }
+            if (!clickUnderCursor("Harvest", herb.getIndex(), () -> hullOf(herb), () -> herb.click("Harvest"), herb.getWorldLocation(),
+                    () -> Rs2Camera.getCharacterAngle(herb))) return;
+            Microbot.log(Level.INFO, "Harvest clicked " + (System.currentTimeMillis() - boarSeenAt) + "ms after the herbiboar appeared ("
+                    + (System.currentTimeMillis() - harvestableAt) + "ms after Harvest was offered)");
+            boarSeenAt = 0;
+            harvestableAt = 0;
+            // The boar despawning is the sooner, surer signal than the animation.
+            int harvested = herb.getIndex();
+            boolean gone = sleepUntil(() -> Microbot.getRs2NpcCache().query().withName("Herbiboar")
+                    .toListOnClientThread().stream().noneMatch(n -> n.getIndex() == harvested), 5000);
+            if (!gone) return;
+            herbiCaught++;
+            HerbiboarSession session = plugin.getSession();
+            if (session != null) session.recordCatch(System.currentTimeMillis());
+            tunnelSince = null;
+            attackedTunnel = false;
+            boarWait = null;
+            huntTunnel = null;
+            preHoverAim = null;
+            BreakHandlerScript.setLockState(false);
+            if (needsToBank(config) || bankAtCatch(Rs2Inventory.emptySlotCount(), config.useHerbSack())) {
+                setState(HerbiboarState.BANK);
+            } else {
+                setState(HerbiboarState.START);
+            }
+            if (distractionAllowed(state, false)) afterCatchDistraction();
+        }
+    }
+
+    private boolean checkForConfusionMessage(HerbiHunterPlugin plugin) {
+        if (!plugin.consumeTrailConfused()) return false;
+        confusedTrails++;
+        HerbiboarSession session = plugin.getSession();
+        if (session != null) session.confusions++;
+        Microbot.log(Level.INFO, "The herbiboar confused us; trail lost (" + confusedTrails
+                + " this session, " + herbiCaught + " caught)");
+        setState(HerbiboarState.START);
+        attackedTunnel = false;
+        boarWait = null;
+        huntTunnel = null;
+        preHoverAim = null;
+        tunnelSince = null;
+        return true;
+    }
+
+    @Override
+    public void shutdown() {
+        if (savedMushtrees != null) {
+            Microbot.getConfigManager().setConfiguration(WALKER_CONFIG, MUSHTREES, savedMushtrees);
+            savedMushtrees = null;
+        }
+        if (savedAutoRun != null) {
+            Microbot.enableAutoRunOn = savedAutoRun;
+            Microbot.useStaminaPotsIfNeeded = savedAutoStamina;
+            Microbot.getConfigManager().setConfiguration(MicrobotConfig.configGroup, MicrobotConfig.keyEnableAutoRunOn, savedAutoRun);
+            Microbot.getConfigManager().setConfiguration(MicrobotConfig.configGroup, MicrobotConfig.keyUseStaminaPotsIfNeeded, savedAutoStamina);
+            savedAutoRun = null;
+        }
+        Microbot.status = "IDLE";
+        resetHerbisCaught();
+        BreakHandlerScript.setLockState(false);
+        // Antiban settings are process-wide statics: give the user's own values back before the reset.
+        if (savedMoveMouseRandomly != null) {
+            Rs2AntibanSettings.moveMouseRandomly = savedMoveMouseRandomly;
+            Rs2AntibanSettings.moveMouseOffScreen = savedMoveMouseOffScreen;
+            Rs2AntibanSettings.simulateMistakes = savedSimulateMistakes;
+            savedMoveMouseRandomly = null;
+        }
+        Rs2Antiban.resetAntibanSettings();
+        super.shutdown();
+    }
+}
