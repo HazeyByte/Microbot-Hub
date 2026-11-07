@@ -59,4 +59,4 @@ Shows the current task, progress, what it is doing, the next step and why, parke
 
 ## Known limits
 - Warrior, Wizard and Ranger path accounts are not supported yet; those tasks are parked.
-- Members-only rewards are left at Jon.
+- Free-to-play worlds only: it stops on a members world unless Quest only is on, so members rewards are left at Jon.
