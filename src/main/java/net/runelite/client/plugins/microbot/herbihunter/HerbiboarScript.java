@@ -1791,7 +1791,8 @@ public class HerbiboarScript extends Script {
                 setState(HerbiboarState.RESET);
                 break;
             case SHORTCUT:
-                if (useHole(from, loc)) tryHoleShortcut();
+                // useHole's cached "walk round" is why we stalled; climb anyway (tryHoleShortcut checks Agility).
+                if (crossesHole(from, loc)) tryHoleShortcut();
                 break;
             case CONTINUE:
             default:
