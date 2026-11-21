@@ -3,9 +3,10 @@ on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize]
   issue_comment:
+    types: [created]
 jobs:
   pr_agent_job:
-    if: ${{ github.event.sender.type != 'Bot' }}
+    if: ${{ github.event.sender.type != 'Bot' && (github.event_name == 'pull_request' || github.event.issue.pull_request) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -13,7 +14,7 @@ jobs:
       pull-requests: write
     steps:
       - name: PR Agent action step
-        uses: the-pr-agent/pr-agent@main
+        uses: The-PR-Agent/pr-agent@e673a02076ce09a4726c3d0c3cc85780e59ca52b # v0.50.0
         env:
           OPENROUTER.KEY: ${{ secrets.OPENROUTER_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
