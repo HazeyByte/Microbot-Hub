@@ -1,0 +1,26 @@
+name: PR Agent
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  issue_comment:
+jobs:
+  pr_agent_job:
+    if: ${{ github.event.sender.type != 'Bot' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: PR Agent action step
+        uses: the-pr-agent/pr-agent@main
+        env:
+          OPENROUTER.KEY: ${{ secrets.OPENROUTER_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # OpenRouter's free router picks a currently-free model; no fallback to a paid one
+          CONFIG.MODEL: "openrouter/openrouter/free"
+          CONFIG.FALLBACK_MODELS: '[]'
+          CONFIG.CUSTOM_MODEL_MAX_TOKENS: "32000"
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "false"
+          github_action_config.auto_improve: "false"
